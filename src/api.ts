@@ -34,3 +34,21 @@ export async function loadImage(path: string): Promise<ImageMetadata> {
 
   return response.json();
 }
+
+export async function convertImage(path: string): Promise<string> {
+  const response = await fetch('http://localhost:8000/convert_image', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to convert image');
+  }
+
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
