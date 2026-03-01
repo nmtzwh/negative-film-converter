@@ -35,13 +35,13 @@ export async function loadImage(path: string): Promise<ImageMetadata> {
   return response.json();
 }
 
-export async function convertImage(path: string): Promise<string> {
+export async function convertImage(path: string, exposure: number = 0.0): Promise<string> {
   const response = await fetch('http://localhost:8000/convert_image', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ path }),
+    body: JSON.stringify({ path, exposure }),
   });
 
   if (!response.ok) {

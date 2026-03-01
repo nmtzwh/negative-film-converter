@@ -13,6 +13,10 @@ app = FastAPI()
 class ImagePath(BaseModel):
     path: str
 
+class ConvertRequest(BaseModel):
+    path: str
+    exposure: float = 0.0
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -33,12 +37,12 @@ def load_image(image_path: ImagePath):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/convert_image")
-def convert_image(image_path: ImagePath):
-    if not os.path.exists(image_path.path):
+def convert_image(request: ConvertRequest):
+    if not os.path.exists(request.path):
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        with rawpy.imread(image_path.path) as raw:
+        with rawpy.imread(request.path) as raw:
             # Postprocess to get 16-bit linear RGB image
             rgb_linear = raw.postprocess(gamma=(1,1), no_auto_bright=True, output_bps=16)
             
@@ -46,7 +50,7 @@ def convert_image(image_path: ImagePath):
             img_array = rgb_linear.astype(np.float32) / 65535.0
             
             # Apply conversion math
-            positive_img = convert_negative_to_positive(img_array)
+            positive_img = convert_negative_to_positive(img_array, exposure=request.exposure)
             
             # Convert back to 8-bit [0, 255] for JPEG encoding
             positive_img_8bit = (positive_img * 255.0).astype(np.uint8)

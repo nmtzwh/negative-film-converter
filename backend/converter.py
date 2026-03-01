@@ -1,6 +1,6 @@
 import numpy as np
 
-def convert_negative_to_positive(img_array: np.ndarray, base_color: tuple = None, gamma: float = 2.2) -> np.ndarray:
+def convert_negative_to_positive(img_array: np.ndarray, base_color: tuple = None, gamma: float = 2.2, exposure: float = 0.0) -> np.ndarray:
     """
     Converts a linear RGB negative image to a positive image.
     
@@ -9,6 +9,7 @@ def convert_negative_to_positive(img_array: np.ndarray, base_color: tuple = None
         base_color: Optional tuple of (R, G, B) representing the film base color.
                     If None, it is estimated from the 99th percentile of each channel.
         gamma: Gamma correction value (default 2.2).
+        exposure: Exposure adjustment in EV stops (default 0.0).
         
     Returns:
         Positive RGB image array with values in range [0, 1].
@@ -83,6 +84,10 @@ def convert_negative_to_positive(img_array: np.ndarray, base_color: tuple = None
             # Calculate required gamma to shift median to target_median
             channel_gamma = np.log(target_median) / np.log(medians[i])
             img_aligned[:, :, i] = np.power(np.clip(img_aligned[:, :, i], 1e-6, 1.0), channel_gamma)
+            
+    # Apply Exposure Compensation
+    gain = 2.0 ** exposure
+    img_aligned = img_aligned * gain
             
     # Step C: Applying the Tone Curve (Gamma Correction)
     # Clip to avoid negative values before exponentiation
