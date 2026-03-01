@@ -63,28 +63,31 @@ def test_load_image_error(mock_imread):
 @patch("converter.convert_negative_to_positive")
 def test_convert_image_success(mock_convert, mock_imencode, mock_imread):
     import numpy as np
-    
+
     # Mock rawpy object
     mock_raw = MagicMock()
     # Postprocess returns a dummy array
     mock_raw.postprocess.return_value = np.zeros((10, 10, 3), dtype=np.uint16)
     mock_imread.return_value.__enter__.return_value = mock_raw
-    
+
     # Mock converter
     mock_convert.return_value = np.zeros((10, 10, 3), dtype=np.float32)
-    
+
     # Mock cv2.imencode
     mock_imencode.return_value = (True, np.array([1, 2, 3], dtype=np.uint8))
-    
+
     with open("dummy.arw", "w") as f:
         f.write("dummy content")
-    
+
     try:
         response = client.post("/convert_image", json={"path": "dummy.arw"})
         assert response.status_code == 200
-        assert response.headers["content-type"] == "image/jpeg"
-        assert response.content == b"\x01\x02\x03"
+        data = response.json()
+        assert "image" in data
+        assert "histogram" in data
+        assert data["image"].startswith("data:image/jpeg;base64,")
     finally:
+        os.remove("dummy.arw")
         if os.path.exists("dummy.arw"):
             os.remove("dummy.arw")
 
