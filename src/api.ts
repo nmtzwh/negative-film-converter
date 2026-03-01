@@ -35,13 +35,35 @@ export async function loadImage(path: string): Promise<ImageMetadata> {
   return response.json();
 }
 
-export async function convertImage(path: string, exposure: number = 0.0): Promise<string> {
+export async function sampleColor(path: string, x: number, y: number): Promise<number[]> {
+  const response = await fetch('http://localhost:8000/sample_color', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path, x, y }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to sample color');
+  }
+
+  const data = await response.json();
+  return data.color;
+}
+export interface ConvertResult {
+  imageUrl: string;
+  histogram: number[][]; // [R, G, B] each with 256 bins
+}
+
+export async function convertImage(path: string, exposure: number = 0.0, baseColor: number[] | null = null): Promise<ConvertResult> {
   const response = await fetch('http://localhost:8000/convert_image', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ path, exposure }),
+    body: JSON.stringify({ path, exposure, base_color: baseColor }),
   });
 
   if (!response.ok) {
@@ -49,6 +71,9 @@ export async function convertImage(path: string, exposure: number = 0.0): Promis
     throw new Error(error.detail || 'Failed to convert image');
   }
 
-  const blob = await response.blob();
-  return URL.createObjectURL(blob);
+  const data = await response.json();
+  return {
+    imageUrl: data.image,
+    histogram: data.histogram,
+  };
 }
