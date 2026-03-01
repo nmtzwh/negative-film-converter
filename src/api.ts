@@ -52,6 +52,47 @@ export async function sampleColor(path: string, x: number, y: number): Promise<n
   const data = await response.json();
   return data.color;
 }
+export interface FileEntry {
+  name: string;
+  path: string;
+}
+
+export async function listDirectory(path: string): Promise<FileEntry[]> {
+  const response = await fetch('http://localhost:8000/list_directory', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to list directory');
+  }
+
+  const data = await response.json();
+  return data.files;
+}
+
+export async function getThumbnail(path: string): Promise<string> {
+  const response = await fetch('http://localhost:8000/get_thumbnail', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to get thumbnail');
+  }
+
+  const data = await response.json();
+  return data.image;
+}
+
 export interface ConvertResult {
   imageUrl: string;
   histogram: number[][]; // [R, G, B] each with 256 bins

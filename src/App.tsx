@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, MouseEvent } from 'react';
-import { checkHealth, loadImage, convertImage, ImageMetadata } from './api';
+import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry } from './api';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Histogram } from './components/Histogram';
+import { FilmStrip } from './components/FilmStrip';
 
 function App() {
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -14,6 +15,7 @@ function App() {
   const [exposure, setExposure] = useState<number>(0.0);
   const [baseColor, setBaseColor] = useState<number[] | null>(null);
   const [isPickingBase, setIsPickingBase] = useState(false);
+  const [files, setFiles] = useState<FileEntry[]>([]);
 
   const imgRef = useRef<HTMLImageElement>(null);
 
@@ -56,6 +58,53 @@ function App() {
     };
   }, [exposure, currentFilePath, baseColor]);
 
+  const loadFile = async (file: string) => {
+    setCurrentFilePath(null); // Reset to clear old image
+    setImageUrl(null);
+    setHistogramData(null);
+    setMetadata(null);
+    setExposure(0.0);
+    setBaseColor(null);
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const data = await loadImage(file);
+      setMetadata(data);
+      setCurrentFilePath(file); // This will trigger the useEffect to convert
+    } catch (e: any) {
+      setError(e.message);
+      setLoading(false);
+    }
+  };
+
+  const handleOpenFolder = async () => {
+    try {
+      const folder = await open({
+        multiple: false,
+        directory: true,
+      });
+
+      if (folder && typeof folder === 'string') {
+        setLoading(true);
+        setError(null);
+        try {
+          const dirFiles = await listDirectory(folder);
+          setFiles(dirFiles);
+          if (dirFiles.length > 0) {
+            loadFile(dirFiles[0].path);
+          }
+        } catch (e: any) {
+          setError(e.message);
+        } finally {
+          setLoading(false);
+        }
+      }
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
   const handleOpenFile = async () => {
     try {
       const file = await open({
@@ -63,29 +112,14 @@ function App() {
         filters: [
           {
             name: 'RAW Images',
-            extensions: ['ARW', 'DNG', 'NEF', 'CR2', 'CR3', 'ORF', 'RW2'],
+            extensions: ['ARW', 'DNG', 'NEF', 'CR2', 'CR3', 'ORF', 'RW2', 'JPG', 'JPEG'],
           },
         ],
       });
 
       if (file && typeof file === 'string') {
-        setCurrentFilePath(null); // Reset to clear old image
-        setImageUrl(null);
-        setHistogramData(null);
-        setMetadata(null);
-        setExposure(0.0);
-        setBaseColor(null);
-        setLoading(true);
-        setError(null);
-        
-        try {
-          const data = await loadImage(file);
-          setMetadata(data);
-          setCurrentFilePath(file); // This will trigger the useEffect to convert
-        } catch (e: any) {
-          setError(e.message);
-          setLoading(false);
-        }
+        setFiles([{ name: file.split(/[/\\]/).pop() || 'image', path: file }]);
+        loadFile(file);
       }
     } catch (e: any) {
       setError(e.message);
@@ -156,8 +190,11 @@ function App() {
       </p>
 
       <div style={{ marginBottom: '20px' }}>
-        <button onClick={handleOpenFile} disabled={!connected || loading} style={{ padding: '10px 20px', fontSize: '16px', marginRight: '20px' }}>
-          {loading && !currentFilePath ? 'Opening...' : 'Open RAW File'}
+        <button onClick={handleOpenFile} disabled={!connected || loading} style={{ padding: '10px 20px', fontSize: '16px', marginRight: '10px' }}>
+          Open RAW File
+        </button>
+        <button onClick={handleOpenFolder} disabled={!connected || loading} style={{ padding: '10px 20px', fontSize: '16px', marginRight: '20px' }}>
+          Open Folder
         </button>
         
         {currentFilePath && (
@@ -246,6 +283,12 @@ function App() {
           </div>
         )}
       </div>
+
+      <FilmStrip 
+        files={files} 
+        currentFilePath={currentFilePath} 
+        onSelectFile={loadFile} 
+      />
     </div>
   );
 }
