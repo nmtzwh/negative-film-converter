@@ -40,8 +40,8 @@ export function FilmStrip({ files, currentFilePath, onSelectFile }: FilmStripPro
       overflowX: 'auto',
       gap: '10px',
       padding: '10px',
-      backgroundColor: '#222',
-      borderTop: '1px solid #444',
+      backgroundColor: 'var(--bg-panel)',
+      borderTop: '1px solid var(--border)',
       height: '120px',
       alignItems: 'center'
     }}>
@@ -51,7 +51,7 @@ export function FilmStrip({ files, currentFilePath, onSelectFile }: FilmStripPro
           onClick={() => onSelectFile(file.path)}
           style={{
             cursor: 'pointer',
-            border: currentFilePath === file.path ? '2px solid #007bff' : '2px solid transparent',
+            border: currentFilePath === file.path ? '2px solid var(--accent)' : '2px solid transparent',
             borderRadius: '4px',
             overflow: 'hidden',
             width: '100px',
@@ -60,7 +60,7 @@ export function FilmStrip({ files, currentFilePath, onSelectFile }: FilmStripPro
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',
-            backgroundColor: '#111',
+            backgroundColor: 'var(--bg-dark)',
             position: 'relative'
           }}
           title={file.name}

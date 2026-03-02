@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, MouseEvent } from 'react';
-import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry } from './api';
+import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry, saveSettings, loadSettings, exportImage, Settings } from './api';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Histogram } from './components/Histogram';
 import { FilmStrip } from './components/FilmStrip';
+import './App.css';
 
 function App() {
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -16,9 +17,14 @@ function App() {
   const [baseColor, setBaseColor] = useState<number[] | null>(null);
   const [isPickingBase, setIsPickingBase] = useState(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
+  
+  // New States for Task 2 & 3
+  const [settingsClipboard, setSettingsClipboard] = useState<Settings | null>(null);
+  const [exportProgress, setExportProgress] = useState<{current: number, total: number} | null>(null);
 
   const imgRef = useRef<HTMLImageElement>(null);
 
+  // Health check
   useEffect(() => {
     const timer = setInterval(async () => {
       const isConnected = await checkHealth();
@@ -28,6 +34,7 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
+  // Conversion trigger when exposure, baseColor, or file changes
   useEffect(() => {
     if (!currentFilePath) return;
 
@@ -58,20 +65,32 @@ function App() {
     };
   }, [exposure, currentFilePath, baseColor]);
 
+  // Auto-save settings debounced
+  useEffect(() => {
+    if (!currentFilePath) return;
+    const timer = setTimeout(() => {
+      saveSettings(currentFilePath, exposure, baseColor).catch(e => console.error("Auto-save failed:", e));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [exposure, baseColor, currentFilePath]);
+
   const loadFile = async (file: string) => {
     setCurrentFilePath(null); // Reset to clear old image
     setImageUrl(null);
     setHistogramData(null);
     setMetadata(null);
-    setExposure(0.0);
-    setBaseColor(null);
     setLoading(true);
     setError(null);
     
     try {
       const data = await loadImage(file);
       setMetadata(data);
-      setCurrentFilePath(file); // This will trigger the useEffect to convert
+      
+      const settings = await loadSettings(file);
+      setExposure(settings.exposure);
+      setBaseColor(settings.base_color);
+
+      setCurrentFilePath(file); // This will trigger the conversion
     } catch (e: any) {
       setError(e.message);
       setLoading(false);
@@ -93,6 +112,9 @@ function App() {
           setFiles(dirFiles);
           if (dirFiles.length > 0) {
             loadFile(dirFiles[0].path);
+          } else {
+            setCurrentFilePath(null);
+            setImageUrl(null);
           }
         } catch (e: any) {
           setError(e.message);
@@ -111,8 +133,8 @@ function App() {
         multiple: false,
         filters: [
           {
-            name: 'RAW Images',
-            extensions: ['ARW', 'DNG', 'NEF', 'CR2', 'CR3', 'ORF', 'RW2', 'JPG', 'JPEG'],
+            name: 'Images',
+            extensions: ['ARW', 'DNG', 'NEF', 'CR2', 'CR3', 'ORF', 'RW2', 'JPG', 'JPEG', 'PNG', 'TIFF', 'TIF', 'BMP'],
           },
         ],
       });
@@ -132,7 +154,6 @@ function App() {
     const img = imgRef.current;
     const rect = img.getBoundingClientRect();
     
-    // Calculate coordinates relative to the image's actual displayed size (object-fit: contain)
     const viewRatio = rect.width / rect.height;
     const imgRatio = img.naturalWidth / img.naturalHeight;
     
@@ -142,11 +163,9 @@ function App() {
     let offsetY = 0;
 
     if (viewRatio > imgRatio) {
-      // Image is bound by height (pillarboxed)
       renderedWidth = rect.height * imgRatio;
       offsetX = (rect.width - renderedWidth) / 2;
     } else {
-      // Image is bound by width (letterboxed)
       renderedHeight = rect.width / imgRatio;
       offsetY = (rect.height - renderedHeight) / 2;
     }
@@ -154,7 +173,6 @@ function App() {
     const clickX = e.clientX - rect.left - offsetX;
     const clickY = e.clientY - rect.top - offsetY;
 
-    // Check if clicked outside the actual image area
     if (clickX < 0 || clickX > renderedWidth || clickY < 0 || clickY > renderedHeight) {
       return;
     }
@@ -175,115 +193,216 @@ function App() {
     }
   };
 
+  const handleCopySettings = () => {
+    setSettingsClipboard({ exposure, base_color: baseColor });
+  };
+
+  const handlePasteSettings = () => {
+    if (settingsClipboard) {
+      setExposure(settingsClipboard.exposure);
+      setBaseColor(settingsClipboard.base_color);
+    }
+  };
+
+  const handleExportCurrent = async () => {
+    if (!currentFilePath) return;
+    try {
+      const outputDir = await open({ directory: true, multiple: false });
+      if (outputDir && typeof outputDir === 'string') {
+        setLoading(true);
+        await exportImage(currentFilePath, outputDir, exposure, baseColor);
+      }
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBatchExport = async () => {
+    if (files.length === 0) return;
+    try {
+      const outputDir = await open({ directory: true, multiple: false });
+      if (outputDir && typeof outputDir === 'string') {
+        setLoading(true);
+        let current = 0;
+        setExportProgress({ current, total: files.length });
+        for (const file of files) {
+          try {
+            const settings = await loadSettings(file.path);
+            await exportImage(file.path, outputDir, settings.exposure, settings.base_color);
+          } catch (err: any) {
+            console.error(`Failed to export ${file.name}:`, err);
+            // Optionally could gather errors here
+          }
+          current++;
+          setExportProgress({ current, total: files.length });
+        }
+        setExportProgress(null);
+      }
+    } catch (e: any) {
+      setError(e.message);
+      setExportProgress(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div style={{ padding: '20px', fontFamily: 'sans-serif', display: 'flex', flexDirection: 'column', height: '100vh', boxSizing: 'border-box' }}>
-      <h1>Negative Film Converter</h1>
-      <p>
-        Backend Status: {' '}
-        {connected === null ? (
-          'Checking...'
-        ) : connected ? (
-          <span style={{ color: 'green' }}>Connected</span>
-        ) : (
-          <span style={{ color: 'red' }}>Disconnected</span>
-        )}
-      </p>
-
-      <div style={{ marginBottom: '20px' }}>
-        <button onClick={handleOpenFile} disabled={!connected || loading} style={{ padding: '10px 20px', fontSize: '16px', marginRight: '10px' }}>
-          Open RAW File
-        </button>
-        <button onClick={handleOpenFolder} disabled={!connected || loading} style={{ padding: '10px 20px', fontSize: '16px', marginRight: '20px' }}>
-          Open Folder
-        </button>
-        
-        {currentFilePath && (
-          <div style={{ display: 'inline-block', verticalAlign: 'middle', padding: '10px', backgroundColor: '#f0f0f0', borderRadius: '8px' }}>
-            <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
-              <div>
-                <label htmlFor="exposure" style={{ marginRight: '10px' }}>Exposure: {exposure.toFixed(2)} EV</label>
-                <input
-                  id="exposure"
-                  type="range"
-                  min="-3"
-                  max="3"
-                  step="0.1"
-                  value={exposure}
-                  onChange={(e) => setExposure(parseFloat(e.target.value))}
-                  disabled={loading}
-                  style={{ width: '150px', verticalAlign: 'middle' }}
-                />
-              </div>
-
-              <div>
-                <button 
-                  onClick={() => setIsPickingBase(!isPickingBase)}
-                  style={{ 
-                    padding: '5px 10px', 
-                    backgroundColor: isPickingBase ? '#007bff' : '#fff',
-                    color: isPickingBase ? '#fff' : '#000',
-                    border: '1px solid #ccc',
-                    borderRadius: '4px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {isPickingBase ? 'Cancel Picker' : 'Pick Film Base'}
-                </button>
-                {baseColor && (
-                  <button 
-                    onClick={() => setBaseColor(null)}
-                    style={{ marginLeft: '10px', padding: '5px 10px' }}
-                  >
-                    Reset WB
-                  </button>
-                )}
-              </div>
-              
-              {loading && <span style={{ color: '#666' }}>Processing...</span>}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {error && <p style={{ color: 'red' }}>Error: {error}</p>}
-
-      <div style={{ display: 'flex', gap: '20px', flex: 1, minHeight: 0 }}>
-        <div style={{ minWidth: '250px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {metadata && (
-            <div>
-              <h3>Image Metadata</h3>
-              <p><strong>Width:</strong> {metadata.width}</p>
-              <p><strong>Height:</strong> {metadata.height}</p>
-              <p><strong>White Balance:</strong> {metadata.camera_white_balance.join(', ')}</p>
-            </div>
-          )}
-          
-          {histogramData && (
-            <div>
-              <h3>Histogram</h3>
-              <Histogram data={histogramData} width={250} height={150} />
-            </div>
+    <div className="app-container">
+      {/* Header */}
+      <header className="app-header">
+        <h1 className="header-title">Negative Film Converter</h1>
+        <div className="header-status">
+          Backend: {' '}
+          {connected === null ? (
+            <span>Checking...</span>
+          ) : connected ? (
+            <span className="status-ok">Connected</span>
+          ) : (
+            <span className="status-err">Disconnected</span>
           )}
         </div>
+      </header>
 
-        {imageUrl && (
-          <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', backgroundColor: '#111', borderRadius: '4px', overflow: 'hidden' }}>
+      {/* Main Area */}
+      <main className="main-content">
+        {/* Left Sidebar - Controls */}
+        <aside className="sidebar">
+          <div className="panel-section">
+            <h3>File</h3>
+            <div className="button-group">
+              <button className="btn" onClick={handleOpenFolder} disabled={!connected || loading} title="Open a folder of RAW files">
+                Open Folder
+              </button>
+              <button className="btn" onClick={handleOpenFile} disabled={!connected || loading} title="Open a single RAW file">
+                Open File
+              </button>
+            </div>
+          </div>
+
+          <div className="panel-section">
+            <h3>Export</h3>
+            <div className="button-group">
+              <button className="btn" onClick={handleExportCurrent} disabled={!currentFilePath || loading} title="Export current image as JPEG">
+                Export Current
+              </button>
+              <button className="btn" onClick={handleBatchExport} disabled={files.length === 0 || loading} title="Export all images in filmstrip">
+                Batch Export All
+              </button>
+            </div>
+            {exportProgress && (
+              <div className="progress-bar-container">
+                <div 
+                  className="progress-bar-fill" 
+                  style={{ width: `${(exportProgress.current / exportProgress.total) * 100}%` }}
+                />
+                <span style={{ fontSize: '0.8rem', marginTop: '2px', display: 'block', textAlign: 'center' }}>
+                  {exportProgress.current} / {exportProgress.total}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="panel-section">
+            <h3>Adjustments</h3>
+            <div className="input-group">
+              <label htmlFor="exposure">Exposure: {exposure.toFixed(2)} EV</label>
+              <input
+                id="exposure"
+                type="range"
+                min="-3"
+                max="3"
+                step="0.1"
+                value={exposure}
+                onChange={(e) => setExposure(parseFloat(e.target.value))}
+                disabled={!currentFilePath || loading}
+              />
+            </div>
+
+            <div className="button-group" style={{ marginTop: '10px' }}>
+              <button 
+                className={`btn ${isPickingBase ? 'active' : ''}`}
+                onClick={() => setIsPickingBase(!isPickingBase)}
+                disabled={!currentFilePath || loading}
+                title="Click on the unexposed film border to set white balance"
+              >
+                {isPickingBase ? 'Cancel Picker' : 'Pick Film Base'}
+              </button>
+              <button 
+                className="btn"
+                onClick={() => setBaseColor(null)}
+                disabled={!baseColor || loading}
+                title="Reset white balance to camera default"
+              >
+                Reset WB
+              </button>
+            </div>
+          </div>
+
+          <div className="panel-section">
+            <h3>Settings</h3>
+            <div className="button-group">
+              <button className="btn" onClick={handleCopySettings} disabled={!currentFilePath}>
+                Copy Settings
+              </button>
+              <button className="btn" onClick={handlePasteSettings} disabled={!currentFilePath || !settingsClipboard}>
+                Paste Settings
+              </button>
+            </div>
+          </div>
+
+          {error && <div className="error-msg">{error}</div>}
+        </aside>
+
+        {/* Center Viewport */}
+        <section className="viewport">
+          {imageUrl ? (
             <img 
               ref={imgRef}
               src={imageUrl} 
               alt="Converted" 
               onClick={handleImageClick}
-              style={{ 
-                maxWidth: '100%', 
-                maxHeight: '100%', 
-                objectFit: 'contain',
-                cursor: isPickingBase ? 'crosshair' : 'default'
-              }} 
+              style={{ cursor: isPickingBase ? 'crosshair' : 'default' }} 
             />
-          </div>
-        )}
-      </div>
+          ) : (
+            <div style={{ color: '#666' }}>No image loaded</div>
+          )}
+          {loading && !exportProgress && (
+            <div className="viewport-overlay">
+              <div className="loader" style={{ marginRight: '10px' }}></div>
+              Processing...
+            </div>
+          )}
+        </section>
 
+        {/* Right Sidebar - Info */}
+        <aside className="sidebar-right">
+          <div className="panel-section">
+            <h3>Histogram</h3>
+            {histogramData ? (
+              <Histogram data={histogramData} width={220} height={150} />
+            ) : (
+              <div style={{ fontSize: '0.85rem', color: '#666' }}>No data</div>
+            )}
+          </div>
+
+          <div className="panel-section">
+            <h3>Image Metadata</h3>
+            {metadata ? (
+              <div style={{ fontSize: '0.85rem', lineHeight: '1.5' }}>
+                <div><strong>Width:</strong> {metadata.width}</div>
+                <div><strong>Height:</strong> {metadata.height}</div>
+                <div><strong>White Balance:</strong> <br/>{metadata.camera_white_balance.map(v => v.toFixed(2)).join(', ')}</div>
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.85rem', color: '#666' }}>No data</div>
+            )}
+          </div>
+        </aside>
+      </main>
+
+      {/* Footer - FilmStrip */}
       <FilmStrip 
         files={files} 
         currentFilePath={currentFilePath} 

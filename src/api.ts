@@ -118,3 +118,58 @@ export async function convertImage(path: string, exposure: number = 0.0, baseCol
     histogram: data.histogram,
   };
 }
+
+export interface Settings {
+  exposure: number;
+  base_color: number[] | null;
+}
+
+export async function saveSettings(path: string, exposure: number, baseColor: number[] | null): Promise<void> {
+  const response = await fetch('http://localhost:8000/save_settings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path, exposure, base_color: baseColor }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to save settings');
+  }
+}
+
+export async function loadSettings(path: string): Promise<Settings> {
+  const response = await fetch('http://localhost:8000/load_settings', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to load settings');
+  }
+
+  return response.json();
+}
+
+export async function exportImage(path: string, outputDir: string, exposure: number, baseColor: number[] | null): Promise<string> {
+  const response = await fetch('http://localhost:8000/export_image', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path, output_dir: outputDir, exposure, base_color: baseColor }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to export image');
+  }
+
+  const data = await response.json();
+  return data.output_path;
+}

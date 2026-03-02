@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 import rawpy
@@ -9,6 +10,15 @@ import numpy as np
 from converter import convert_negative_to_positive
 
 app = FastAPI()
+
+# Add CORS middleware to allow the Tauri frontend to connect
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust this in production if necessary
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class ImagePath(BaseModel):
     path: str
@@ -23,9 +33,88 @@ class SampleRequest(BaseModel):
     x: float  # Normalized coordinates 0.0 - 1.0
     y: float
 
+class SettingsRequest(BaseModel):
+    path: str
+    exposure: float = 0.0
+    base_color: list[float] | None = None
+
+class ExportRequest(BaseModel):
+    path: str
+    output_dir: str
+    exposure: float = 0.0
+    base_color: list[float] | None = None
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+import json
+
+def is_raw(path: str) -> bool:
+    return not path.lower().endswith(('.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp'))
+
+def get_rgb_float(path: str) -> np.ndarray:
+    if is_raw(path):
+        with rawpy.imread(path) as raw:
+            # Postprocess to get 16-bit linear RGB image
+            rgb_linear = raw.postprocess(gamma=(1,1), no_auto_bright=True, output_bps=16)
+            return rgb_linear.astype(np.float32) / 65535.0
+    else:
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise Exception("Failed to load image")
+        
+        # Handle BGR -> RGB
+        if len(img.shape) == 3:
+            if img.shape[2] == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+            else:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        elif len(img.shape) == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            
+        if img.dtype == np.uint8:
+            return img.astype(np.float32) / 255.0
+        elif img.dtype == np.uint16:
+            return img.astype(np.float32) / 65535.0
+        elif img.dtype == np.float32:
+            return img
+        else:
+            return img.astype(np.float32) / np.max(img)
+
+@app.post("/save_settings")
+def save_settings(request: SettingsRequest):
+    if not os.path.exists(request.path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    settings_path = request.path + ".json"
+    try:
+        settings = {
+            "exposure": request.exposure,
+            "base_color": request.base_color
+        }
+        with open(settings_path, "w") as f:
+            json.dump(settings, f)
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/load_settings")
+def load_settings(request: ImagePath):
+    settings_path = request.path + ".json"
+    if not os.path.exists(settings_path):
+        return {"exposure": 0.0, "base_color": None} # Defaults
+        
+    try:
+        with open(settings_path, "r") as f:
+            settings = json.load(f)
+            return {
+                "exposure": settings.get("exposure", 0.0),
+                "base_color": settings.get("base_color", None)
+            }
+    except Exception as e:
+        # If we fail to read settings, just return defaults rather than breaking
+        return {"exposure": 0.0, "base_color": None}
 
 @app.post("/sample_color")
 def sample_color(request: SampleRequest):
@@ -33,36 +122,30 @@ def sample_color(request: SampleRequest):
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        with rawpy.imread(request.path) as raw:
-            # Postprocess to get 16-bit linear RGB image
-            rgb_linear = raw.postprocess(gamma=(1,1), no_auto_bright=True, output_bps=16)
-            
-            h, w = rgb_linear.shape[:2]
-            
-            # Map normalized coords to pixel coords
-            px = int(request.x * w)
-            py = int(request.y * h)
-            
-            # Ensure within bounds
-            px = max(0, min(w - 1, px))
-            py = max(0, min(h - 1, py))
-            
-            # Sample a 5x5 region around the point for average color
-            region_size = 5
-            half_size = region_size // 2
-            
-            y_start = max(0, py - half_size)
-            y_end = min(h, py + half_size + 1)
-            x_start = max(0, px - half_size)
-            x_end = min(w, px + half_size + 1)
-            
-            region = rgb_linear[y_start:y_end, x_start:x_end]
-            avg_color = np.mean(region, axis=(0, 1))
-            
-            # Convert to float [0, 1]
-            color_normalized = avg_color / 65535.0
-            
-            return {"color": color_normalized.tolist()}
+        rgb_float = get_rgb_float(request.path)
+        h, w = rgb_float.shape[:2]
+        
+        # Map normalized coords to pixel coords
+        px = int(request.x * w)
+        py = int(request.y * h)
+        
+        # Ensure within bounds
+        px = max(0, min(w - 1, px))
+        py = max(0, min(h - 1, py))
+        
+        # Sample a 5x5 region around the point for average color
+        region_size = 5
+        half_size = region_size // 2
+        
+        y_start = max(0, py - half_size)
+        y_end = min(h, py + half_size + 1)
+        x_start = max(0, px - half_size)
+        x_end = min(w, px + half_size + 1)
+        
+        region = rgb_float[y_start:y_end, x_start:x_end]
+        avg_color = np.mean(region, axis=(0, 1))
+        
+        return {"color": avg_color.tolist()}
             
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -73,11 +156,22 @@ def load_image(image_path: ImagePath):
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        with rawpy.imread(image_path.path) as raw:
+        if is_raw(image_path.path):
+            with rawpy.imread(image_path.path) as raw:
+                return {
+                    "width": raw.sizes.width,
+                    "height": raw.sizes.height,
+                    "camera_white_balance": raw.camera_white_balance.tolist()
+                }
+        else:
+            img = cv2.imread(image_path.path, cv2.IMREAD_UNCHANGED)
+            if img is None:
+                raise Exception("Failed to load image")
+            h, w = img.shape[:2]
             return {
-                "width": raw.sizes.width,
-                "height": raw.sizes.height,
-                "camera_white_balance": raw.camera_white_balance.tolist()
+                "width": w,
+                "height": h,
+                "camera_white_balance": [1.0, 1.0, 1.0, 1.0]
             }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -92,7 +186,7 @@ def list_directory(request: DirectoryRequest):
     if not os.path.isdir(request.path):
         raise HTTPException(status_code=404, detail="Directory not found")
         
-    supported_extensions = ('.arw', '.dng', '.nef', '.cr2', '.cr3', '.orf', '.rw2', '.jpg', '.jpeg')
+    supported_extensions = ('.arw', '.dng', '.nef', '.cr2', '.cr3', '.orf', '.rw2', '.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp')
     files = []
     
     try:
@@ -114,17 +208,7 @@ def get_thumbnail(request: ImagePath):
         raise HTTPException(status_code=404, detail="File not found")
         
     try:
-        if request.path.lower().endswith(('.jpg', '.jpeg')):
-            # Fast path for JPEGs
-            img = cv2.imread(request.path)
-            if img is None:
-                raise Exception("Failed to read image")
-            # Resize
-            h, w = img.shape[:2]
-            scale = 200 / max(h, w)
-            new_size = (int(w * scale), int(h * scale))
-            thumb = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
-        else:
+        if is_raw(request.path):
             with rawpy.imread(request.path) as raw:
                 # Use half_size for faster loading of raw
                 rgb = raw.postprocess(half_size=True, use_camera_wb=True, output_bps=8)
@@ -137,6 +221,16 @@ def get_thumbnail(request: ImagePath):
                 
                 # BGR for OpenCV
                 thumb = cv2.cvtColor(thumb_rgb, cv2.COLOR_RGB2BGR)
+        else:
+            # Fast path for non-RAWs
+            img = cv2.imread(request.path)
+            if img is None:
+                raise Exception("Failed to read image")
+            # Resize
+            h, w = img.shape[:2]
+            scale = 200 / max(h, w)
+            new_size = (int(w * scale), int(h * scale))
+            thumb = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
                 
         # Encode
         success, encoded_image = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -155,40 +249,71 @@ def convert_image(request: ConvertRequest):
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        with rawpy.imread(request.path) as raw:
-            # Postprocess to get 16-bit linear RGB image
-            rgb_linear = raw.postprocess(gamma=(1,1), no_auto_bright=True, output_bps=16)
+        img_array = get_rgb_float(request.path)
+        
+        # Apply conversion math
+        base_color_tuple = tuple(request.base_color) if request.base_color else None
+        positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
+        
+        # Convert back to 8-bit [0, 255] for JPEG encoding and histogram
+        positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
+        
+        # Calculate Histogram (on RGB channels)
+        hist = []
+        for i in range(3):
+            hist_channel = cv2.calcHist([positive_img_8bit], [i], None, [256], [0, 256])
+            hist.append([int(v[0]) for v in hist_channel])
             
-            # Convert to float [0, 1]
-            img_array = rgb_linear.astype(np.float32) / 65535.0
+        # OpenCV uses BGR, so convert RGB to BGR before encoding
+        bgr_img = cv2.cvtColor(positive_img_8bit, cv2.COLOR_RGB2BGR)
+        
+        # Encode as JPEG
+        success, encoded_image = cv2.imencode(".jpg", bgr_img)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to encode image")
             
-            # Apply conversion math
-            base_color_tuple = tuple(request.base_color) if request.base_color else None
-            positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
+        # Return JSON with base64 image and histogram
+        img_b64 = base64.b64encode(encoded_image.tobytes()).decode('utf-8')
+        return {
+            "image": f"data:image/jpeg;base64,{img_b64}",
+            "histogram": hist
+        }
             
-            # Convert back to 8-bit [0, 255] for JPEG encoding and histogram
-            positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/export_image")
+def export_image(request: ExportRequest):
+    if not os.path.exists(request.path):
+        raise HTTPException(status_code=404, detail="File not found")
+    if not os.path.isdir(request.output_dir):
+        raise HTTPException(status_code=404, detail="Output directory not found")
+        
+    try:
+        img_array = get_rgb_float(request.path)
+        
+        # Apply conversion math
+        base_color_tuple = tuple(request.base_color) if request.base_color else None
+        positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
+        
+        # Convert back to 8-bit [0, 255] for JPEG encoding
+        positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
+        
+        # OpenCV uses BGR
+        bgr_img = cv2.cvtColor(positive_img_8bit, cv2.COLOR_RGB2BGR)
+        
+        # Determine output filename (original name + _converted.jpg)
+        filename = os.path.basename(request.path)
+        name, _ = os.path.splitext(filename)
+        out_filename = f"{name}_converted.jpg"
+        out_path = os.path.join(request.output_dir, out_filename)
+        
+        # Encode as high-quality JPEG
+        success = cv2.imwrite(out_path, bgr_img, [cv2.IMWRITE_JPEG_QUALITY, 100])
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save exported image")
             
-            # Calculate Histogram (on RGB channels)
-            hist = []
-            for i in range(3):
-                hist_channel = cv2.calcHist([positive_img_8bit], [i], None, [256], [0, 256])
-                hist.append([int(v[0]) for v in hist_channel])
-                
-            # OpenCV uses BGR, so convert RGB to BGR before encoding
-            bgr_img = cv2.cvtColor(positive_img_8bit, cv2.COLOR_RGB2BGR)
-            
-            # Encode as JPEG
-            success, encoded_image = cv2.imencode(".jpg", bgr_img)
-            if not success:
-                raise HTTPException(status_code=500, detail="Failed to encode image")
-                
-            # Return JSON with base64 image and histogram
-            img_b64 = base64.b64encode(encoded_image.tobytes()).decode('utf-8')
-            return {
-                "image": f"data:image/jpeg;base64,{img_b64}",
-                "histogram": hist
-            }
+        return {"status": "success", "output_path": out_path}
             
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
