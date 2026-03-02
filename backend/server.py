@@ -8,6 +8,7 @@ import os
 import cv2
 import numpy as np
 from converter import convert_negative_to_positive
+from curve_fitting import fit_roll_curve, log_func, apply_curve
 
 app = FastAPI()
 
@@ -43,6 +44,13 @@ class ExportRequest(BaseModel):
     output_dir: str
     exposure: float = 0.0
     base_color: list[float] | None = None
+
+class RollProfileRequest(BaseModel):
+    dir_path: str
+    anchors: list[list[float]] # List of [R, G, B]
+
+class DirectoryRequest(BaseModel):
+    path: str
 
 @app.get("/health")
 def health():
@@ -81,6 +89,62 @@ def get_rgb_float(path: str) -> np.ndarray:
             return img
         else:
             return img.astype(np.float32) / np.max(img)
+
+@app.post("/update_roll_profile")
+def update_roll_profile(request: RollProfileRequest):
+    if not os.path.isdir(request.dir_path):
+        raise HTTPException(status_code=404, detail="Directory not found")
+        
+    profile_path = os.path.join(request.dir_path, "roll_profile.json")
+    
+    # Try fitting a curve
+    curve_params = fit_roll_curve(request.anchors)
+    
+    # Generate visualization data if we have a curve (100 points along X axis)
+    vis_data = None
+    if curve_params:
+        vis_data = {'r': [], 'g': [], 'b': []}
+        x_vals = np.linspace(0, 1, 100)
+        for ch in ['r', 'g', 'b']:
+            y_vals = log_func(x_vals, *curve_params[ch])
+            vis_data[ch] = y_vals.tolist()
+            
+    profile_data = {
+        "anchors": request.anchors,
+        "curve_params": curve_params
+    }
+    
+    with open(profile_path, "w") as f:
+        json.dump(profile_data, f)
+        
+    return {"status": "success", "curve_params": curve_params, "vis_data": vis_data}
+
+@app.post("/load_roll_profile")
+def load_roll_profile(request: DirectoryRequest):
+    profile_path = os.path.join(request.path, "roll_profile.json")
+    if not os.path.exists(profile_path):
+        return {"anchors": [], "curve_params": None, "vis_data": None}
+        
+    try:
+        with open(profile_path, "r") as f:
+            data = json.load(f)
+            
+        # Re-generate vis data
+        vis_data = None
+        if data.get("curve_params"):
+            vis_data = {'r': [], 'g': [], 'b': []}
+            x_vals = np.linspace(0, 1, 100)
+            for ch in ['r', 'g', 'b']:
+                y_vals = log_func(x_vals, *data["curve_params"][ch])
+                vis_data[ch] = y_vals.tolist()
+                
+        return {
+            "anchors": data.get("anchors", []), 
+            "curve_params": data.get("curve_params"),
+            "vis_data": vis_data
+        }
+    except Exception:
+        return {"anchors": [], "curve_params": None, "vis_data": None}
 
 @app.post("/save_settings")
 def save_settings(request: SettingsRequest):
@@ -178,9 +242,6 @@ def load_image(image_path: ImagePath):
 
 import base64
 
-class DirectoryRequest(BaseModel):
-    path: str
-
 @app.post("/list_directory")
 def list_directory(request: DirectoryRequest):
     if not os.path.isdir(request.path):
@@ -251,9 +312,27 @@ def convert_image(request: ConvertRequest):
     try:
         img_array = get_rgb_float(request.path)
         
-        # Apply conversion math
-        base_color_tuple = tuple(request.base_color) if request.base_color else None
-        positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
+        # Check for roll profile
+        dir_path = os.path.dirname(request.path)
+        profile_path = os.path.join(dir_path, "roll_profile.json")
+        curve_params = None
+        if os.path.exists(profile_path):
+            try:
+                with open(profile_path, "r") as f:
+                    data = json.load(f)
+                    curve_params = data.get("curve_params")
+            except:
+                pass
+
+        if curve_params:
+            positive_img = apply_curve(img_array, curve_params)
+            # Apply exposure
+            gain = 2.0 ** request.exposure
+            positive_img = np.clip(positive_img * gain, 0.0, 1.0)
+        else:
+            # Apply generic conversion math
+            base_color_tuple = tuple(request.base_color) if request.base_color else None
+            positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
         
         # Convert back to 8-bit [0, 255] for JPEG encoding and histogram
         positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
@@ -292,9 +371,27 @@ def export_image(request: ExportRequest):
     try:
         img_array = get_rgb_float(request.path)
         
-        # Apply conversion math
-        base_color_tuple = tuple(request.base_color) if request.base_color else None
-        positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
+        # Check for roll profile
+        dir_path = os.path.dirname(request.path)
+        profile_path = os.path.join(dir_path, "roll_profile.json")
+        curve_params = None
+        if os.path.exists(profile_path):
+            try:
+                with open(profile_path, "r") as f:
+                    data = json.load(f)
+                    curve_params = data.get("curve_params")
+            except:
+                pass
+
+        if curve_params:
+            positive_img = apply_curve(img_array, curve_params)
+            # Apply exposure
+            gain = 2.0 ** request.exposure
+            positive_img = np.clip(positive_img * gain, 0.0, 1.0)
+        else:
+            # Apply generic conversion math
+            base_color_tuple = tuple(request.base_color) if request.base_color else None
+            positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
         
         # Convert back to 8-bit [0, 255] for JPEG encoding
         positive_img_8bit = (positive_img * 255.0).astype(np.uint8)

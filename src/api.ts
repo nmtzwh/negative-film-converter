@@ -173,3 +173,43 @@ export async function exportImage(path: string, outputDir: string, exposure: num
   const data = await response.json();
   return data.output_path;
 }
+
+export interface RollProfileData {
+  anchors: number[][];
+  curve_params: any | null;
+  vis_data: { r: number[], g: number[], b: number[] } | null;
+}
+
+export async function loadRollProfile(dirPath: string): Promise<RollProfileData> {
+  const response = await fetch('http://localhost:8000/load_roll_profile', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ path: dirPath }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to load roll profile');
+  }
+
+  return response.json();
+}
+
+export async function updateRollProfile(dirPath: string, anchors: number[][]): Promise<RollProfileData> {
+  const response = await fetch('http://localhost:8000/update_roll_profile', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ dir_path: dirPath, anchors }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to update roll profile');
+  }
+
+  return response.json();
+}

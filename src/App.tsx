@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, MouseEvent } from 'react';
-import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry, saveSettings, loadSettings, exportImage, Settings } from './api';
+import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry, saveSettings, loadSettings, exportImage, Settings, updateRollProfile, loadRollProfile } from './api';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Histogram } from './components/Histogram';
 import { FilmStrip } from './components/FilmStrip';
+import { CurveGraph } from './components/CurveGraph';
 import './App.css';
 
 function App() {
@@ -21,6 +22,12 @@ function App() {
   // New States for Task 2 & 3
   const [settingsClipboard, setSettingsClipboard] = useState<Settings | null>(null);
   const [exportProgress, setExportProgress] = useState<{current: number, total: number} | null>(null);
+
+  // Roll Calibration States
+  const [isPickingAnchor, setIsPickingAnchor] = useState(false);
+  const [rollAnchors, setRollAnchors] = useState<number[][]>([]);
+  const [curveVisData, setCurveVisData] = useState<any>(null);
+  const [currentDir, setCurrentDir] = useState<string | null>(null);
 
   const imgRef = useRef<HTMLImageElement>(null);
 
@@ -110,6 +117,18 @@ function App() {
         try {
           const dirFiles = await listDirectory(folder);
           setFiles(dirFiles);
+          setCurrentDir(folder);
+          
+          try {
+            const profile = await loadRollProfile(folder);
+            setRollAnchors(profile.anchors || []);
+            setCurveVisData(profile.vis_data || null);
+          } catch (e) {
+            console.error("Failed to load roll profile", e);
+            setRollAnchors([]);
+            setCurveVisData(null);
+          }
+
           if (dirFiles.length > 0) {
             loadFile(dirFiles[0].path);
           } else {
@@ -149,7 +168,7 @@ function App() {
   };
 
   const handleImageClick = async (e: MouseEvent<HTMLImageElement>) => {
-    if (!isPickingBase || !currentFilePath || !imgRef.current) return;
+    if ((!isPickingBase && !isPickingAnchor) || !currentFilePath || !imgRef.current) return;
 
     const img = imgRef.current;
     const rect = img.getBoundingClientRect();
@@ -184,8 +203,17 @@ function App() {
       setLoading(true);
       const { sampleColor } = await import('./api');
       const color = await sampleColor(currentFilePath, normalizedX, normalizedY);
-      setBaseColor(color);
-      setIsPickingBase(false); // Turn off picker after selection
+      
+      if (isPickingBase) {
+        setBaseColor(color);
+        setIsPickingBase(false);
+      } else if (isPickingAnchor && currentDir) {
+        const newAnchors = [...rollAnchors, color];
+        setRollAnchors(newAnchors);
+        const profile = await updateRollProfile(currentDir, newAnchors);
+        setCurveVisData(profile.vis_data);
+        setIsPickingAnchor(false);
+      }
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -341,6 +369,53 @@ function App() {
           </div>
 
           <div className="panel-section">
+            <h3>Roll Calibration</h3>
+            <div className="button-group">
+              <button 
+                className={`btn ${isPickingAnchor ? 'active' : ''}`}
+                onClick={() => setIsPickingAnchor(!isPickingAnchor)}
+                disabled={!currentFilePath || !currentDir || loading}
+                title="Sample gray points across the roll to build a density curve"
+              >
+                {isPickingAnchor ? 'Cancel Picker' : 'Pick Gray Anchor'}
+              </button>
+            </div>
+            {rollAnchors.length > 0 && (
+              <div style={{ marginTop: '10px' }}>
+                <div style={{ fontSize: '0.8rem', marginBottom: '5px' }}>Anchors: {rollAnchors.length}</div>
+                <div style={{ maxHeight: '100px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                  {rollAnchors.map((anchor, idx) => (
+                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--bg-header)', padding: '2px 5px', borderRadius: '4px' }}>
+                      <span style={{ fontSize: '0.75rem' }}>
+                        RGB: {anchor.map(v => (v * 255).toFixed(0)).join(', ')}
+                      </span>
+                      <button 
+                        onClick={async () => {
+                          const newAnchors = rollAnchors.filter((_, i) => i !== idx);
+                          setRollAnchors(newAnchors);
+                          if (currentDir) {
+                            try {
+                              const profile = await updateRollProfile(currentDir, newAnchors);
+                              setCurveVisData(profile.vis_data);
+                            } catch (e: any) { setError(e.message); }
+                          }
+                        }}
+                        style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '0 5px' }}
+                        title="Remove Anchor"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: '10px' }}>
+                  <CurveGraph data={curveVisData} width={268} height={100} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="panel-section">
             <h3>Settings</h3>
             <div className="button-group">
               <button className="btn" onClick={handleCopySettings} disabled={!currentFilePath}>
@@ -363,7 +438,7 @@ function App() {
               src={imageUrl} 
               alt="Converted" 
               onClick={handleImageClick}
-              style={{ cursor: isPickingBase ? 'crosshair' : 'default' }} 
+              style={{ cursor: (isPickingBase || isPickingAnchor) ? 'crosshair' : 'default' }} 
             />
           ) : (
             <div style={{ color: '#666' }}>No image loaded</div>
