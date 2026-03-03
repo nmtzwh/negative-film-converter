@@ -5,6 +5,7 @@ import { Histogram } from './components/Histogram';
 import { FilmStrip } from './components/FilmStrip';
 import { CurveGraph } from './components/CurveGraph';
 import { CropOverlay } from './components/CropOverlay';
+import { useHistory } from './hooks/useHistory';
 import './App.css';
 
 function App() {
@@ -23,6 +24,13 @@ function App() {
   const [isCropping, setIsCropping] = useState(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
   
+  const { pushState, undo, redo, resetHistory, canUndo, canRedo } = useHistory({
+    exposure: 0.0,
+    baseColor: null,
+    baseColorSamples: [],
+    crop: null
+  });
+
   // New States for Task 2 & 3
   const [settingsClipboard, setSettingsClipboard] = useState<Settings | null>(null);
   const [exportProgress, setExportProgress] = useState<{current: number, total: number} | null>(null);
@@ -59,6 +67,29 @@ function App() {
       if ((e.key === '\\' || e.code === 'Space') && !e.repeat) {
         if (e.code === 'Space' && e.target instanceof HTMLInputElement) return; // ignore typing space in inputs
         setShowOriginal(true);
+      }
+      
+      // Undo / Redo
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === 'z' && !e.shiftKey) {
+          e.preventDefault();
+          const prevState = undo();
+          if (prevState) {
+            setExposure(prevState.exposure);
+            setBaseColor(prevState.baseColor);
+            setBaseColorSamples(prevState.baseColorSamples);
+            setCrop(prevState.crop);
+          }
+        } else if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) {
+          e.preventDefault();
+          const nextState = redo();
+          if (nextState) {
+            setExposure(nextState.exposure);
+            setBaseColor(nextState.baseColor);
+            setBaseColorSamples(nextState.baseColorSamples);
+            setCrop(nextState.crop);
+          }
+        }
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -105,14 +136,15 @@ function App() {
     };
   }, [exposure, currentFilePath, baseColor, curveVisData]);
 
-  // Auto-save settings debounced
+  // Auto-save settings debounced and push history
   useEffect(() => {
     if (!currentFilePath) return;
     const timer = setTimeout(() => {
+      pushState({ exposure, baseColor, baseColorSamples, crop });
       saveSettings(currentFilePath, exposure, baseColor, crop).catch(e => console.error("Auto-save failed:", e));
     }, 1000);
     return () => clearTimeout(timer);
-  }, [exposure, baseColor, crop, currentFilePath]);
+  }, [exposure, baseColor, baseColorSamples, crop, currentFilePath, pushState]);
 
   const loadFile = async (file: string) => {
     setCurrentFilePath(null); // Reset to clear old image
@@ -135,6 +167,13 @@ function App() {
       setBaseColor(settings.base_color);
       setBaseColorSamples([]);
       setCrop(settings.crop || null);
+      
+      resetHistory({
+        exposure: settings.exposure,
+        baseColor: settings.base_color,
+        baseColorSamples: [],
+        crop: settings.crop || null
+      });
 
       setCurrentFilePath(file); // This will trigger the conversion
     } catch (e: any) {
@@ -459,6 +498,30 @@ function App() {
 
           <div className="panel-section">
             <h3>Adjustments</h3>
+            <div className="button-group" style={{ marginBottom: '10px' }}>
+              <button className="btn" onClick={() => {
+                const prevState = undo();
+                if (prevState) {
+                  setExposure(prevState.exposure);
+                  setBaseColor(prevState.baseColor);
+                  setBaseColorSamples(prevState.baseColorSamples);
+                  setCrop(prevState.crop);
+                }
+              }} disabled={!canUndo || loading} title="Undo (Ctrl+Z)">
+                Undo
+              </button>
+              <button className="btn" onClick={() => {
+                const nextState = redo();
+                if (nextState) {
+                  setExposure(nextState.exposure);
+                  setBaseColor(nextState.baseColor);
+                  setBaseColorSamples(nextState.baseColorSamples);
+                  setCrop(nextState.crop);
+                }
+              }} disabled={!canRedo || loading} title="Redo (Ctrl+Y)">
+                Redo
+              </button>
+            </div>
             <div className="input-group">
               <label htmlFor="exposure">Exposure: {exposure.toFixed(2)} EV</label>
               <input
