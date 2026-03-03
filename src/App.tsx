@@ -143,12 +143,18 @@ function App() {
 
   const handleOpenFolder = async () => {
     try {
-      const folder = await open({
-        multiple: false,
-        directory: true,
-      });
+      let folder: string | null = null;
+      if ('__TAURI_INTERNALS__' in window) {
+        const selected = await open({
+          multiple: false,
+          directory: true,
+        });
+        if (typeof selected === 'string') folder = selected;
+      } else {
+        folder = window.prompt("Web Browser Mode: Enter absolute directory path on your local machine:");
+      }
 
-      if (folder && typeof folder === 'string') {
+      if (folder) {
         setLoading(true);
         setError(null);
         try {
@@ -185,17 +191,23 @@ function App() {
 
   const handleOpenFile = async () => {
     try {
-      const file = await open({
-        multiple: false,
-        filters: [
-          {
-            name: 'Images',
-            extensions: ['ARW', 'DNG', 'NEF', 'CR2', 'CR3', 'ORF', 'RW2', 'JPG', 'JPEG', 'PNG', 'TIFF', 'TIF', 'BMP'],
-          },
-        ],
-      });
+      let file: string | null = null;
+      if ('__TAURI_INTERNALS__' in window) {
+        const selected = await open({
+          multiple: false,
+          filters: [
+            {
+              name: 'Images',
+              extensions: ['ARW', 'DNG', 'NEF', 'CR2', 'CR3', 'ORF', 'RW2', 'JPG', 'JPEG', 'PNG', 'TIFF', 'TIF', 'BMP'],
+            },
+          ],
+        });
+        if (typeof selected === 'string') file = selected;
+      } else {
+        file = window.prompt("Web Browser Mode: Enter absolute file path on your local machine:");
+      }
 
-      if (file && typeof file === 'string') {
+      if (file) {
         setFiles([{ name: file.split(/[/\\]/).pop() || 'image', path: file }]);
         
         const dirMatch = file.match(/(.*)[/\\]/);
@@ -322,8 +334,14 @@ function App() {
   const handleExportCurrent = async () => {
     if (!currentFilePath) return;
     try {
-      const outputDir = await open({ directory: true, multiple: false });
-      if (outputDir && typeof outputDir === 'string') {
+      let outputDir: string | null = null;
+      if ('__TAURI_INTERNALS__' in window) {
+        const selected = await open({ directory: true, multiple: false });
+        if (typeof selected === 'string') outputDir = selected;
+      } else {
+        outputDir = window.prompt("Web Browser Mode: Enter absolute directory path for export:");
+      }
+      if (outputDir) {
         setLoading(true);
         await exportImage(currentFilePath, outputDir, exposure, baseColor, crop);
       }
@@ -337,8 +355,14 @@ function App() {
   const handleBatchExport = async () => {
     if (files.length === 0) return;
     try {
-      const outputDir = await open({ directory: true, multiple: false });
-      if (outputDir && typeof outputDir === 'string') {
+      let outputDir: string | null = null;
+      if ('__TAURI_INTERNALS__' in window) {
+        const selected = await open({ directory: true, multiple: false });
+        if (typeof selected === 'string') outputDir = selected;
+      } else {
+        outputDir = window.prompt("Web Browser Mode: Enter absolute directory path for batch export:");
+      }
+      if (outputDir) {
         setLoading(true);
         let current = 0;
         setExportProgress({ current, total: files.length });
