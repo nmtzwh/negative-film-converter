@@ -38,12 +38,14 @@ class SettingsRequest(BaseModel):
     path: str
     exposure: float = 0.0
     base_color: list[float] | None = None
+    crop: list[float] | None = None
 
 class ExportRequest(BaseModel):
     path: str
     output_dir: str
     exposure: float = 0.0
     base_color: list[float] | None = None
+    crop: list[float] | None = None
 
 class RollProfileRequest(BaseModel):
     dir_path: str
@@ -155,7 +157,8 @@ def save_settings(request: SettingsRequest):
     try:
         settings = {
             "exposure": request.exposure,
-            "base_color": request.base_color
+            "base_color": request.base_color,
+            "crop": request.crop
         }
         with open(settings_path, "w") as f:
             json.dump(settings, f)
@@ -174,11 +177,12 @@ def load_settings(request: ImagePath):
             settings = json.load(f)
             return {
                 "exposure": settings.get("exposure", 0.0),
-                "base_color": settings.get("base_color", None)
+                "base_color": settings.get("base_color", None),
+                "crop": settings.get("crop", None)
             }
     except Exception as e:
         # If we fail to read settings, just return defaults rather than breaking
-        return {"exposure": 0.0, "base_color": None}
+        return {"exposure": 0.0, "base_color": None, "crop": None}
 
 @app.post("/sample_color")
 def sample_color(request: SampleRequest):
@@ -241,6 +245,38 @@ def load_image(image_path: ImagePath):
         raise HTTPException(status_code=400, detail=str(e))
 
 import base64
+
+@app.post("/get_raw_preview")
+def get_raw_preview(request: ImagePath):
+    if not os.path.exists(request.path):
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    try:
+        if is_raw(request.path):
+            with rawpy.imread(request.path) as raw:
+                # Fast extract of un-converted data
+                rgb = raw.postprocess(half_size=True, use_camera_wb=True, output_bps=8)
+                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        else:
+            bgr = cv2.imread(request.path)
+            if bgr is None:
+                raise Exception("Failed to read image")
+                
+        # Resize to a reasonable preview size to keep base64 payload small (~1080p max)
+        h, w = bgr.shape[:2]
+        max_dim = 1080
+        if max(h, w) > max_dim:
+            scale = max_dim / max(h, w)
+            bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+        success, encoded_image = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to encode raw preview")
+            
+        img_b64 = base64.b64encode(encoded_image.tobytes()).decode('utf-8')
+        return {"image": f"data:image/jpeg;base64,{img_b64}"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/list_directory")
 def list_directory(request: DirectoryRequest):
@@ -398,6 +434,19 @@ def export_image(request: ExportRequest):
         
         # OpenCV uses BGR
         bgr_img = cv2.cvtColor(positive_img_8bit, cv2.COLOR_RGB2BGR)
+        
+        # Apply physical crop if requested
+        if request.crop:
+            x_min, y_min, x_max, y_max = request.crop
+            h, w = bgr_img.shape[:2]
+            
+            px_min = max(0, int(x_min * w))
+            py_min = max(0, int(y_min * h))
+            px_max = min(w, int(x_max * w))
+            py_max = min(h, int(y_max * h))
+            
+            if px_max > px_min and py_max > py_min:
+                bgr_img = bgr_img[py_min:py_max, px_min:px_max]
         
         # Determine output filename (original name + _converted.jpg)
         filename = os.path.basename(request.path)
