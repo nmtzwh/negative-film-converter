@@ -17,6 +17,7 @@ function App() {
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [exposure, setExposure] = useState<number>(0.0);
   const [baseColor, setBaseColor] = useState<number[] | null>(null);
+  const [baseColorSamples, setBaseColorSamples] = useState<number[][]>([]);
   const [crop, setCrop] = useState<number[] | null>(null);
   const [isPickingBase, setIsPickingBase] = useState(false);
   const [isCropping, setIsCropping] = useState(false);
@@ -132,6 +133,7 @@ function App() {
       const settings = await loadSettings(file);
       setExposure(settings.exposure);
       setBaseColor(settings.base_color);
+      setBaseColorSamples([]);
       setCrop(settings.crop || null);
 
       setCurrentFilePath(file); // This will trigger the conversion
@@ -272,8 +274,20 @@ function App() {
       const color = await sampleColor(currentFilePath, normalizedX, normalizedY);
       
       if (isPickingBase) {
-        setBaseColor(color);
-        setIsPickingBase(false);
+        const newSamples = [...baseColorSamples, color];
+        setBaseColorSamples(newSamples);
+        
+        const avgColor = [0, 0, 0];
+        for (const s of newSamples) {
+          avgColor[0] += s[0];
+          avgColor[1] += s[1];
+          avgColor[2] += s[2];
+        }
+        avgColor[0] /= newSamples.length;
+        avgColor[1] /= newSamples.length;
+        avgColor[2] /= newSamples.length;
+        
+        setBaseColor(avgColor);
       } else if (isPickingAnchor && currentDir) {
         const newAnchors = [...rollAnchors, color];
         setRollAnchors(newAnchors);
@@ -476,13 +490,31 @@ function App() {
               </button>
               <button 
                 className="btn"
-                onClick={() => setBaseColor(null)}
+                onClick={() => {
+                  setBaseColor(null);
+                  setBaseColorSamples([]);
+                }}
                 disabled={!baseColor || loading}
                 title="Reset white balance to camera default"
               >
                 Reset WB
               </button>
             </div>
+            
+            {baseColorSamples.length > 0 && (
+              <div style={{ marginTop: '5px', fontSize: '0.8rem', display: 'flex', justifyContent: 'space-between' }}>
+                <span>Samples: {baseColorSamples.length}</span>
+                <button 
+                  onClick={() => {
+                    setBaseColorSamples([]);
+                    // keep current baseColor, just clear the samples so they can start fresh
+                  }} 
+                  style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: 0 }}
+                >
+                  Clear Points
+                </button>
+              </div>
+            )}
             
             <div className="button-group" style={{ marginTop: '10px' }}>
               <button 

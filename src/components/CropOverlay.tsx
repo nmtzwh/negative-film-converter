@@ -12,6 +12,7 @@ export function CropOverlay({ crop, onChange, imgRef, scale, pan }: CropOverlayP
   const [activeHandle, setActiveHandle] = useState<number | null>(null);
   const [localCrop, setLocalCrop] = useState<number[]>(crop || [0, 0, 1, 1]);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const drawStartRef = useRef<{ x: number, y: number } | null>(null);
   const [imgLayout, setImgLayout] = useState({ width: 0, height: 0, top: 0, left: 0 });
 
   useEffect(() => {
@@ -81,7 +82,14 @@ export function CropOverlay({ crop, onChange, imgRef, scale, pan }: CropOverlayP
       
       setLocalCrop(prev => {
         const next = [...prev];
-        if (activeHandle === 0) { // top-left
+        if (activeHandle === -1 && drawStartRef.current) {
+          const startX = drawStartRef.current.x;
+          const startY = drawStartRef.current.y;
+          next[0] = Math.min(startX, clampedX);
+          next[1] = Math.min(startY, clampedY);
+          next[2] = Math.max(startX, clampedX);
+          next[3] = Math.max(startY, clampedY);
+        } else if (activeHandle === 0) { // top-left
           next[0] = Math.min(clampedX, next[2] - 0.01);
           next[1] = Math.min(clampedY, next[3] - 0.01);
         } else if (activeHandle === 1) { // top-right
@@ -101,6 +109,9 @@ export function CropOverlay({ crop, onChange, imgRef, scale, pan }: CropOverlayP
     const handleMouseUp = () => {
       if (activeHandle !== null) {
         onChange(localCrop);
+        if (activeHandle === -1) {
+          drawStartRef.current = null;
+        }
         setActiveHandle(null);
       }
     };
@@ -142,8 +153,22 @@ export function CropOverlay({ crop, onChange, imgRef, scale, pan }: CropOverlayP
           width: imgLayout.width,
           height: imgLayout.height,
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-          pointerEvents: activeHandle !== null ? 'auto' : 'none',
+          pointerEvents: 'auto',
+          cursor: activeHandle === null ? 'crosshair' : 'default',
           transformOrigin: 'center center',
+        }}
+        onMouseDown={(e) => {
+          if (activeHandle !== null) return;
+          const rect = overlayRef.current?.getBoundingClientRect();
+          if (!rect) return;
+          const x = (e.clientX - rect.left) / rect.width;
+          const y = (e.clientY - rect.top) / rect.height;
+          const clampedX = Math.max(0, Math.min(1, x));
+          const clampedY = Math.max(0, Math.min(1, y));
+          
+          drawStartRef.current = { x: clampedX, y: clampedY };
+          setActiveHandle(-1);
+          setLocalCrop([clampedX, clampedY, clampedX, clampedY]);
         }}
       >
         {/* Dark overlay for cropped out areas */}
