@@ -197,6 +197,24 @@ function App() {
 
       if (file && typeof file === 'string') {
         setFiles([{ name: file.split(/[/\\]/).pop() || 'image', path: file }]);
+        
+        const dirMatch = file.match(/(.*)[/\\]/);
+        if (dirMatch) {
+          const dir = dirMatch[1];
+          setCurrentDir(dir);
+          try {
+            const profile = await loadRollProfile(dir);
+            setRollAnchors(profile.anchors || []);
+            setCurveVisData(profile.vis_data || null);
+          } catch (e) {
+            console.error("Failed to load roll profile", e);
+            setRollAnchors([]);
+            setCurveVisData(null);
+          }
+        } else {
+          setCurrentDir(null);
+        }
+
         loadFile(file);
       }
     } catch (e: any) {
@@ -422,7 +440,10 @@ function App() {
                 className={`btn ${isPickingBase ? 'active' : ''}`}
                 onClick={() => {
                   setIsPickingBase(!isPickingBase);
-                  if (!isPickingBase) setIsCropping(false);
+                  if (!isPickingBase) {
+                    setIsCropping(false);
+                    setIsPickingAnchor(false);
+                  }
                 }}
                 disabled={!currentFilePath || loading}
                 title="Click on the unexposed film border to set white balance"
@@ -444,7 +465,10 @@ function App() {
                 className={`btn ${isCropping ? 'active' : ''}`}
                 onClick={() => {
                   setIsCropping(!isCropping);
-                  if (!isCropping) setIsPickingBase(false);
+                  if (!isCropping) {
+                    setIsPickingBase(false);
+                    setIsPickingAnchor(false);
+                  }
                 }}
                 disabled={!currentFilePath || loading}
                 title="Crop the image"
@@ -467,7 +491,13 @@ function App() {
             <div className="button-group">
               <button 
                 className={`btn ${isPickingAnchor ? 'active' : ''}`}
-                onClick={() => setIsPickingAnchor(!isPickingAnchor)}
+                onClick={() => {
+                  setIsPickingAnchor(!isPickingAnchor);
+                  if (!isPickingAnchor) {
+                    setIsPickingBase(false);
+                    setIsCropping(false);
+                  }
+                }}
                 disabled={!currentFilePath || !currentDir || loading}
                 title="Sample gray points across the roll to build a density curve"
               >
