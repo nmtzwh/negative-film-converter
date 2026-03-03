@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, MouseEvent } from 'react';
-import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry, saveSettings, loadSettings, exportImage, Settings, updateRollProfile, loadRollProfile } from './api';
+import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry, saveSettings, loadSettings, exportImage, Settings, updateRollProfile, loadRollProfile, getRawPreview } from './api';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Histogram } from './components/Histogram';
 import { FilmStrip } from './components/FilmStrip';
@@ -29,6 +29,14 @@ function App() {
   const [curveVisData, setCurveVisData] = useState<any>(null);
   const [currentDir, setCurrentDir] = useState<string | null>(null);
 
+  // Viewport Interaction States
+  const [rawImageUrl, setRawImageUrl] = useState<string | null>(null);
+  const [showOriginal, setShowOriginal] = useState(false);
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStart = useRef({ x: 0, y: 0 });
+
   const imgRef = useRef<HTMLImageElement>(null);
 
   // Health check
@@ -39,6 +47,27 @@ function App() {
     }, 2000);
 
     return () => clearInterval(timer);
+  }, []);
+
+  // Hotkeys for Hold-to-Compare
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.key === '\\' || e.code === 'Space') && !e.repeat) {
+        if (e.code === 'Space' && e.target instanceof HTMLInputElement) return; // ignore typing space in inputs
+        setShowOriginal(true);
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === '\\' || e.code === 'Space') {
+        setShowOriginal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
   }, []);
 
   // Conversion trigger when exposure, baseColor, or file changes
@@ -84,12 +113,16 @@ function App() {
   const loadFile = async (file: string) => {
     setCurrentFilePath(null); // Reset to clear old image
     setImageUrl(null);
+    setRawImageUrl(null);
     setHistogramData(null);
     setMetadata(null);
+    setScale(1);
+    setPan({ x: 0, y: 0 });
     setLoading(true);
     setError(null);
     
     try {
+      getRawPreview(file).then(setRawImageUrl).catch(console.error);
       const data = await loadImage(file);
       setMetadata(data);
       
@@ -219,6 +252,37 @@ function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    const zoomSensitivity = 0.002;
+    const delta = -e.deltaY * zoomSensitivity;
+    setScale(s => Math.min(Math.max(1, s + delta * s), 10));
+    if (scale <= 1) setPan({ x: 0, y: 0 });
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (isPickingBase || isPickingAnchor) return;
+    if (scale > 1) {
+      setIsPanning(true);
+      panStart.current = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isPanning) return;
+    setPan({
+      x: e.clientX - panStart.current.x,
+      y: e.clientY - panStart.current.y
+    });
+  };
+
+  const handleMouseUp = () => {
+    setIsPanning(false);
+  };
+
+  const handleMouseLeave = () => {
+    setIsPanning(false);
   };
 
   const handleCopySettings = () => {
@@ -431,14 +495,24 @@ function App() {
         </aside>
 
         {/* Center Viewport */}
-        <section className="viewport">
+        <section 
+          className={`viewport ${scale > 1 && !isPickingBase && !isPickingAnchor ? 'can-pan' : ''} ${isPanning ? 'is-panning' : ''}`}
+          onWheel={handleWheel}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
+        >
           {imageUrl ? (
             <img 
               ref={imgRef}
-              src={imageUrl} 
+              src={showOriginal && rawImageUrl ? rawImageUrl : imageUrl} 
               alt="Converted" 
               onClick={handleImageClick}
-              style={{ cursor: (isPickingBase || isPickingAnchor) ? 'crosshair' : 'default' }} 
+              style={{ 
+                cursor: (isPickingBase || isPickingAnchor) ? 'crosshair' : (scale > 1 && isPanning ? 'grabbing' : (scale > 1 ? 'grab' : 'default')),
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`
+              }} 
             />
           ) : (
             <div style={{ color: '#666' }}>No image loaded</div>
