@@ -102,7 +102,7 @@ function App() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [exposure, currentFilePath, baseColor]);
+  }, [exposure, currentFilePath, baseColor, curveVisData]);
 
   // Auto-save settings debounced
   useEffect(() => {
@@ -506,7 +506,24 @@ function App() {
             </div>
             {rollAnchors.length > 0 && (
               <div style={{ marginTop: '10px' }}>
-                <div style={{ fontSize: '0.8rem', marginBottom: '5px' }}>Anchors: {rollAnchors.length}</div>
+                <div style={{ fontSize: '0.8rem', marginBottom: '5px', display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Anchors: {rollAnchors.length}</span>
+                  <button 
+                    onClick={async () => {
+                      setRollAnchors([]);
+                      if (currentDir) {
+                        try {
+                          const profile = await updateRollProfile(currentDir, []);
+                          setCurveVisData(profile.vis_data);
+                        } catch (e: any) { setError(e.message); }
+                      }
+                    }}
+                    style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: 0 }}
+                    title="Clear All Anchors"
+                  >
+                    Clear All
+                  </button>
+                </div>
                 <div style={{ maxHeight: '100px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
                   {rollAnchors.map((anchor, idx) => (
                     <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--bg-header)', padding: '2px 5px', borderRadius: '4px' }}>
