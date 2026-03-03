@@ -340,14 +340,14 @@ def get_thumbnail(request: ImagePath):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+from cache import global_cache
+
 @app.post("/convert_image")
 def convert_image(request: ConvertRequest):
     if not os.path.exists(request.path):
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        img_array = get_rgb_float(request.path)
-        
         # Check for roll profile
         dir_path = os.path.dirname(request.path)
         profile_path = os.path.join(dir_path, "roll_profile.json")
@@ -360,15 +360,27 @@ def convert_image(request: ConvertRequest):
             except:
                 pass
 
-        if curve_params:
-            positive_img = apply_curve(img_array, curve_params)
-            # Apply exposure
-            gain = 2.0 ** request.exposure
-            positive_img = np.clip(positive_img * gain, 0.0, 1.0)
+        base_color_tuple = tuple(request.base_color) if request.base_color else None
+        
+        # Check Cache
+        cached_positive = global_cache.get(request.path, base_color_tuple, curve_params)
+        
+        if cached_positive is not None:
+            positive_img_base = cached_positive
         else:
-            # Apply generic conversion math
-            base_color_tuple = tuple(request.base_color) if request.base_color else None
-            positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
+            img_array = get_rgb_float(request.path)
+            
+            if curve_params:
+                positive_img_base = apply_curve(img_array, curve_params)
+            else:
+                # Apply generic conversion math
+                positive_img_base = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=0.0)
+            
+            global_cache.set(request.path, base_color_tuple, curve_params, positive_img_base)
+
+        # Apply exposure fast
+        gain = 2.0 ** request.exposure
+        positive_img = np.clip(positive_img_base * gain, 0.0, 1.0)
         
         # Convert back to 8-bit [0, 255] for JPEG encoding and histogram
         positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
