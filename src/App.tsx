@@ -4,6 +4,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { Histogram } from './components/Histogram';
 import { FilmStrip } from './components/FilmStrip';
 import { CurveGraph } from './components/CurveGraph';
+import { CropOverlay } from './components/CropOverlay';
 import './App.css';
 
 function App() {
@@ -16,7 +17,9 @@ function App() {
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [exposure, setExposure] = useState<number>(0.0);
   const [baseColor, setBaseColor] = useState<number[] | null>(null);
+  const [crop, setCrop] = useState<number[] | null>(null);
   const [isPickingBase, setIsPickingBase] = useState(false);
+  const [isCropping, setIsCropping] = useState(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
   
   // New States for Task 2 & 3
@@ -105,10 +108,10 @@ function App() {
   useEffect(() => {
     if (!currentFilePath) return;
     const timer = setTimeout(() => {
-      saveSettings(currentFilePath, exposure, baseColor).catch(e => console.error("Auto-save failed:", e));
+      saveSettings(currentFilePath, exposure, baseColor, crop).catch(e => console.error("Auto-save failed:", e));
     }, 1000);
     return () => clearTimeout(timer);
-  }, [exposure, baseColor, currentFilePath]);
+  }, [exposure, baseColor, crop, currentFilePath]);
 
   const loadFile = async (file: string) => {
     setCurrentFilePath(null); // Reset to clear old image
@@ -129,6 +132,7 @@ function App() {
       const settings = await loadSettings(file);
       setExposure(settings.exposure);
       setBaseColor(settings.base_color);
+      setCrop(settings.crop || null);
 
       setCurrentFilePath(file); // This will trigger the conversion
     } catch (e: any) {
@@ -201,7 +205,7 @@ function App() {
   };
 
   const handleImageClick = async (e: MouseEvent<HTMLImageElement>) => {
-    if ((!isPickingBase && !isPickingAnchor) || !currentFilePath || !imgRef.current) return;
+    if ((!isPickingBase && !isPickingAnchor) || !currentFilePath || !imgRef.current || isCropping) return;
 
     const img = imgRef.current;
     const rect = img.getBoundingClientRect();
@@ -286,13 +290,14 @@ function App() {
   };
 
   const handleCopySettings = () => {
-    setSettingsClipboard({ exposure, base_color: baseColor });
+    setSettingsClipboard({ exposure, base_color: baseColor, crop });
   };
 
   const handlePasteSettings = () => {
     if (settingsClipboard) {
       setExposure(settingsClipboard.exposure);
       setBaseColor(settingsClipboard.base_color);
+      if (settingsClipboard.crop) setCrop(settingsClipboard.crop);
     }
   };
 
@@ -302,7 +307,7 @@ function App() {
       const outputDir = await open({ directory: true, multiple: false });
       if (outputDir && typeof outputDir === 'string') {
         setLoading(true);
-        await exportImage(currentFilePath, outputDir, exposure, baseColor);
+        await exportImage(currentFilePath, outputDir, exposure, baseColor, crop);
       }
     } catch (e: any) {
       setError(e.message);
@@ -322,7 +327,7 @@ function App() {
         for (const file of files) {
           try {
             const settings = await loadSettings(file.path);
-            await exportImage(file.path, outputDir, settings.exposure, settings.base_color);
+            await exportImage(file.path, outputDir, settings.exposure, settings.base_color, settings.crop);
           } catch (err: any) {
             console.error(`Failed to export ${file.name}:`, err);
             // Optionally could gather errors here
@@ -415,7 +420,10 @@ function App() {
             <div className="button-group" style={{ marginTop: '10px' }}>
               <button 
                 className={`btn ${isPickingBase ? 'active' : ''}`}
-                onClick={() => setIsPickingBase(!isPickingBase)}
+                onClick={() => {
+                  setIsPickingBase(!isPickingBase);
+                  if (!isPickingBase) setIsCropping(false);
+                }}
                 disabled={!currentFilePath || loading}
                 title="Click on the unexposed film border to set white balance"
               >
@@ -428,6 +436,28 @@ function App() {
                 title="Reset white balance to camera default"
               >
                 Reset WB
+              </button>
+            </div>
+            
+            <div className="button-group" style={{ marginTop: '10px' }}>
+              <button 
+                className={`btn ${isCropping ? 'active' : ''}`}
+                onClick={() => {
+                  setIsCropping(!isCropping);
+                  if (!isCropping) setIsPickingBase(false);
+                }}
+                disabled={!currentFilePath || loading}
+                title="Crop the image"
+              >
+                {isCropping ? 'Done Cropping' : 'Crop'}
+              </button>
+              <button 
+                className="btn"
+                onClick={() => setCrop(null)}
+                disabled={!crop || loading}
+                title="Reset Crop"
+              >
+                Reset Crop
               </button>
             </div>
           </div>
@@ -496,7 +526,7 @@ function App() {
 
         {/* Center Viewport */}
         <section 
-          className={`viewport ${scale > 1 && !isPickingBase && !isPickingAnchor ? 'can-pan' : ''} ${isPanning ? 'is-panning' : ''}`}
+          className={`viewport ${scale > 1 && !isPickingBase && !isPickingAnchor && !isCropping ? 'can-pan' : ''} ${isPanning ? 'is-panning' : ''}`}
           onWheel={handleWheel}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
@@ -504,16 +534,27 @@ function App() {
           onMouseLeave={handleMouseLeave}
         >
           {imageUrl ? (
-            <img 
-              ref={imgRef}
-              src={showOriginal && rawImageUrl ? rawImageUrl : imageUrl} 
-              alt="Converted" 
-              onClick={handleImageClick}
-              style={{ 
-                cursor: (isPickingBase || isPickingAnchor) ? 'crosshair' : (scale > 1 && isPanning ? 'grabbing' : (scale > 1 ? 'grab' : 'default')),
-                transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`
-              }} 
-            />
+            <>
+              <img 
+                ref={imgRef}
+                src={showOriginal && rawImageUrl ? rawImageUrl : imageUrl} 
+                alt="Converted" 
+                onClick={handleImageClick}
+                style={{ 
+                  cursor: (isPickingBase || isPickingAnchor) ? 'crosshair' : (scale > 1 && isPanning ? 'grabbing' : (scale > 1 && !isCropping ? 'grab' : 'default')),
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`
+                }} 
+              />
+              {isCropping && (
+                <CropOverlay 
+                  crop={crop} 
+                  onChange={setCrop} 
+                  imgRef={imgRef} 
+                  scale={scale} 
+                  pan={pan} 
+                />
+              )}
+            </>
           ) : (
             <div style={{ color: '#666' }}>No image loaded</div>
           )}
