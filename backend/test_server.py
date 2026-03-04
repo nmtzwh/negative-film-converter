@@ -91,3 +91,34 @@ def test_convert_image_success(mock_convert, mock_imencode, mock_imread):
         if os.path.exists("dummy.arw"):
             os.remove("dummy.arw")
 
+def test_save_settings_with_samples(tmp_path):
+    img_path = tmp_path / "test.jpg"
+    img_path.touch()
+    
+    samples = [{"color": [255, 200, 150], "x": 0.5, "y": 0.5}]
+    req = {
+        "path": str(img_path),
+        "exposure": 1.0,
+        "base_color_samples": samples
+    }
+    resp = client.post("/save_settings", json=req)
+    assert resp.status_code == 200
+    
+    import json
+    with open(str(img_path) + ".json", "r") as f:
+        data = json.load(f)
+        assert data["base_color_samples"] == samples
+
+def test_load_settings_with_samples(tmp_path):
+    img_path = tmp_path / "test2.jpg"
+    img_path.touch()
+    
+    samples = [{"color": [255, 200, 150], "x": 0.5, "y": 0.5}]
+    import json
+    with open(str(img_path) + ".json", "w") as f:
+        json.dump({"exposure": 1.0, "base_color_samples": samples}, f)
+        
+    resp = client.post("/load_settings", json={"path": str(img_path)})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["base_color_samples"] == samples

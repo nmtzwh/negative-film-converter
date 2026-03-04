@@ -43,6 +43,7 @@ class SettingsRequest(BaseModel):
     path: str
     exposure: float = 0.0
     base_color: list[float] | None = None
+    base_color_samples: list[dict] | None = None
     crop: list[float] | None = None
     user_curves: dict | None = None
 
@@ -165,6 +166,7 @@ def save_settings(request: SettingsRequest):
         settings = {
             "exposure": request.exposure,
             "base_color": request.base_color,
+            "base_color_samples": request.base_color_samples,
             "crop": request.crop,
             "user_curves": request.user_curves
         }
@@ -186,6 +188,7 @@ def load_settings(request: ImagePath):
             return {
                 "exposure": settings.get("exposure", 0.0),
                 "base_color": settings.get("base_color", None),
+                "base_color_samples": settings.get("base_color_samples", []),
                 "crop": settings.get("crop", None),
                 "user_curves": settings.get("user_curves", None)
             }
