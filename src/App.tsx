@@ -44,6 +44,7 @@ function App() {
   // Viewport Interaction States
   const [rawImageUrl, setRawImageUrl] = useState<string | null>(null);
   const [showOriginal, setShowOriginal] = useState(false);
+  const [isBeforeViewSticky, setIsBeforeViewSticky] = useState(false);
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
@@ -699,11 +700,28 @@ function App() {
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseLeave}
         >
+          {imageUrl && (
+            <div style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 10, display: 'flex', gap: '10px' }}>
+              <button 
+                className={`btn ${isBeforeViewSticky ? 'active' : ''}`}
+                onClick={() => setIsBeforeViewSticky(!isBeforeViewSticky)}
+                disabled={!rawImageUrl}
+                title="Toggle Before/After View"
+                style={{
+                  backgroundColor: isBeforeViewSticky ? 'var(--accent)' : 'var(--bg-panel)',
+                  opacity: 0.9,
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.5)'
+                }}
+              >
+                {isBeforeViewSticky ? 'Showing Before' : 'Compare'}
+              </button>
+            </div>
+          )}
           {imageUrl ? (
             <>
               <img 
                 ref={imgRef}
-                src={showOriginal && rawImageUrl ? rawImageUrl : imageUrl} 
+                src={(showOriginal || isBeforeViewSticky) && rawImageUrl ? rawImageUrl : imageUrl} 
                 alt="Converted" 
                 onClick={handleImageClick}
                 style={{ 
