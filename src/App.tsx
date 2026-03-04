@@ -155,6 +155,7 @@ function App() {
     setMetadata(null);
     setScale(1);
     setPan({ x: 0, y: 0 });
+    setIsBeforeViewSticky(false);
     setLoading(true);
     setError(null);
     
@@ -532,7 +533,10 @@ function App() {
                 max="3"
                 step="0.1"
                 value={exposure}
-                onChange={(e) => setExposure(parseFloat(e.target.value))}
+                onChange={(e) => {
+                  setExposure(parseFloat(e.target.value));
+                  setIsBeforeViewSticky(false);
+                }}
                 disabled={!currentFilePath || loading}
               />
             </div>
@@ -557,6 +561,7 @@ function App() {
                 onClick={() => {
                   setBaseColor(null);
                   setBaseColorSamples([]);
+                  setIsBeforeViewSticky(false);
                 }}
                 disabled={!baseColor || loading}
                 title="Reset white balance to camera default"
@@ -585,6 +590,7 @@ function App() {
                 className={`btn ${isCropping ? 'active' : ''}`}
                 onClick={() => {
                   setIsCropping(!isCropping);
+                  setIsBeforeViewSticky(false);
                   if (!isCropping) {
                     setIsPickingBase(false);
                     setIsPickingAnchor(false);
@@ -597,7 +603,10 @@ function App() {
               </button>
               <button 
                 className="btn"
-                onClick={() => setCrop(null)}
+                onClick={() => {
+                  setCrop(null);
+                  setIsBeforeViewSticky(false);
+                }}
                 disabled={!crop || loading}
                 title="Reset Crop"
               >
