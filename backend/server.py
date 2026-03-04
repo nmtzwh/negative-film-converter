@@ -249,34 +249,38 @@ def load_image(image_path: ImagePath):
 
 import base64
 
+def sync_get_raw_preview(path: str) -> str:
+    if is_raw(path):
+        with rawpy.imread(path) as raw:
+            # Fast extract of un-converted data
+            rgb = raw.postprocess(half_size=True, use_camera_wb=True, output_bps=8)
+            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    else:
+        bgr = cv2.imread(path)
+        if bgr is None:
+            raise Exception("Failed to read image")
+            
+    # Resize to a reasonable preview size to keep base64 payload small (~1080p max)
+    h, w = bgr.shape[:2]
+    max_dim = 1080
+    if max(h, w) > max_dim:
+        scale = max_dim / max(h, w)
+        bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+    success, encoded_image = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if not success:
+        raise Exception("Failed to encode raw preview")
+        
+    return base64.b64encode(encoded_image.tobytes()).decode('utf-8')
+
 @app.post("/get_raw_preview")
-def get_raw_preview(request: ImagePath):
+async def get_raw_preview(request: ImagePath):
     if not os.path.exists(request.path):
         raise HTTPException(status_code=404, detail="File not found")
         
     try:
-        if is_raw(request.path):
-            with rawpy.imread(request.path) as raw:
-                # Fast extract of un-converted data
-                rgb = raw.postprocess(half_size=True, use_camera_wb=True, output_bps=8)
-                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        else:
-            bgr = cv2.imread(request.path)
-            if bgr is None:
-                raise Exception("Failed to read image")
-                
-        # Resize to a reasonable preview size to keep base64 payload small (~1080p max)
-        h, w = bgr.shape[:2]
-        max_dim = 1080
-        if max(h, w) > max_dim:
-            scale = max_dim / max(h, w)
-            bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-
-        success, encoded_image = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to encode raw preview")
-            
-        img_b64 = base64.b64encode(encoded_image.tobytes()).decode('utf-8')
+        loop = asyncio.get_running_loop()
+        img_b64 = await loop.run_in_executor(executor, sync_get_raw_preview, request.path)
         return {"image": f"data:image/jpeg;base64,{img_b64}"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -420,70 +424,74 @@ async def convert_image(request: ConvertRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+def sync_export_image(request: ExportRequest) -> str:
+    img_array = get_rgb_float(request.path)
+    
+    # Check for roll profile
+    dir_path = os.path.dirname(request.path)
+    profile_path = os.path.join(dir_path, "roll_profile.json")
+    curve_params = None
+    if os.path.exists(profile_path):
+        try:
+            with open(profile_path, "r") as f:
+                data = json.load(f)
+                curve_params = data.get("curve_params")
+        except:
+            pass
+
+    if curve_params:
+        positive_img = apply_curve(img_array, curve_params)
+        # Apply exposure
+        gain = 2.0 ** request.exposure
+        positive_img = np.clip(positive_img * gain, 0.0, 1.0)
+    else:
+        # Apply generic conversion math
+        base_color_tuple = tuple(request.base_color) if request.base_color else None
+        positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
+    
+    # Convert back to 8-bit [0, 255] for JPEG encoding
+    positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
+    
+    # OpenCV uses BGR
+    bgr_img = cv2.cvtColor(positive_img_8bit, cv2.COLOR_RGB2BGR)
+    
+    # Apply physical crop if requested
+    if request.crop:
+        x_min, y_min, x_max, y_max = request.crop
+        h, w = bgr_img.shape[:2]
+        
+        px_min = max(0, int(x_min * w))
+        py_min = max(0, int(y_min * h))
+        px_max = min(w, int(x_max * w))
+        py_max = min(h, int(y_max * h))
+        
+        if px_max > px_min and py_max > py_min:
+            bgr_img = bgr_img[py_min:py_max, px_min:px_max]
+    
+    # Determine output filename (original name + _converted.jpg)
+    filename = os.path.basename(request.path)
+    name, _ = os.path.splitext(filename)
+    out_filename = f"{name}_converted.jpg"
+    out_path = os.path.join(request.output_dir, out_filename)
+    
+    # Encode as high-quality JPEG
+    success = cv2.imwrite(out_path, bgr_img, [cv2.IMWRITE_JPEG_QUALITY, 100])
+    if not success:
+        raise Exception("Failed to save exported image")
+        
+    return out_path
+
 @app.post("/export_image")
-def export_image(request: ExportRequest):
+async def export_image(request: ExportRequest):
     if not os.path.exists(request.path):
         raise HTTPException(status_code=404, detail="File not found")
     if not os.path.isdir(request.output_dir):
         raise HTTPException(status_code=404, detail="Output directory not found")
         
     try:
-        img_array = get_rgb_float(request.path)
-        
-        # Check for roll profile
-        dir_path = os.path.dirname(request.path)
-        profile_path = os.path.join(dir_path, "roll_profile.json")
-        curve_params = None
-        if os.path.exists(profile_path):
-            try:
-                with open(profile_path, "r") as f:
-                    data = json.load(f)
-                    curve_params = data.get("curve_params")
-            except:
-                pass
-
-        if curve_params:
-            positive_img = apply_curve(img_array, curve_params)
-            # Apply exposure
-            gain = 2.0 ** request.exposure
-            positive_img = np.clip(positive_img * gain, 0.0, 1.0)
-        else:
-            # Apply generic conversion math
-            base_color_tuple = tuple(request.base_color) if request.base_color else None
-            positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
-        
-        # Convert back to 8-bit [0, 255] for JPEG encoding
-        positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
-        
-        # OpenCV uses BGR
-        bgr_img = cv2.cvtColor(positive_img_8bit, cv2.COLOR_RGB2BGR)
-        
-        # Apply physical crop if requested
-        if request.crop:
-            x_min, y_min, x_max, y_max = request.crop
-            h, w = bgr_img.shape[:2]
-            
-            px_min = max(0, int(x_min * w))
-            py_min = max(0, int(y_min * h))
-            px_max = min(w, int(x_max * w))
-            py_max = min(h, int(y_max * h))
-            
-            if px_max > px_min and py_max > py_min:
-                bgr_img = bgr_img[py_min:py_max, px_min:px_max]
-        
-        # Determine output filename (original name + _converted.jpg)
-        filename = os.path.basename(request.path)
-        name, _ = os.path.splitext(filename)
-        out_filename = f"{name}_converted.jpg"
-        out_path = os.path.join(request.output_dir, out_filename)
-        
-        # Encode as high-quality JPEG
-        success = cv2.imwrite(out_path, bgr_img, [cv2.IMWRITE_JPEG_QUALITY, 100])
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to save exported image")
-            
+        loop = asyncio.get_running_loop()
+        out_path = await loop.run_in_executor(executor, sync_export_image, request)
         return {"status": "success", "output_path": out_path}
-            
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
