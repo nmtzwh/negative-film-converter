@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, MouseEvent } from 'react';
-import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry, saveSettings, loadSettings, exportImage, Settings, updateRollProfile, loadRollProfile, getRawPreview, Curves } from './api';
+import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry, saveSettings, loadSettings, exportImage, Settings, updateRollProfile, loadRollProfile, getRawPreview, Curves, ColorSample } from './api';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Histogram } from './components/Histogram';
 import { FilmStrip } from './components/FilmStrip';
 import { CurveGraph } from './components/CurveGraph';
 import { CropOverlay } from './components/CropOverlay';
 import { ToneCurveEditor } from './components/ToneCurveEditor';
+import { BaseColorMarkers } from './components/BaseColorMarkers';
 import { useHistory } from './hooks/useHistory';
 import './App.css';
 
@@ -19,7 +20,7 @@ function App() {
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [exposure, setExposure] = useState<number>(0.0);
   const [baseColor, setBaseColor] = useState<number[] | null>(null);
-  const [baseColorSamples, setBaseColorSamples] = useState<number[][]>([]);
+  const [baseColorSamples, setBaseColorSamples] = useState<ColorSample[]>([]);
   const [crop, setCrop] = useState<number[] | null>(null);
   const [isPickingBase, setIsPickingBase] = useState(false);
   const [isCropping, setIsCropping] = useState(false);
@@ -149,7 +150,7 @@ function App() {
     if (!currentFilePath) return;
     const timer = setTimeout(() => {
       pushState({ exposure, baseColor, baseColorSamples, crop, userCurves });
-      saveSettings(currentFilePath, exposure, baseColor, crop, userCurves).catch(e => console.error("Auto-save failed:", e));
+      saveSettings(currentFilePath, exposure, baseColor, baseColorSamples, crop, userCurves).catch(e => console.error("Auto-save failed:", e));
     }, 1000);
     return () => clearTimeout(timer);
   }, [exposure, baseColor, baseColorSamples, crop, userCurves, currentFilePath, pushState]);
@@ -174,14 +175,14 @@ function App() {
       const settings = await loadSettings(file);
       setExposure(settings.exposure);
       setBaseColor(settings.base_color);
-      setBaseColorSamples([]);
+      setBaseColorSamples(settings.base_color_samples || []);
       setCrop(settings.crop || null);
       setUserCurves(settings.user_curves || defaultCurves);
       
       resetHistory({
         exposure: settings.exposure,
         baseColor: settings.base_color,
-        baseColorSamples: [],
+        baseColorSamples: settings.base_color_samples || [],
         crop: settings.crop || null,
         userCurves: settings.user_curves || defaultCurves
       });
@@ -324,14 +325,15 @@ function App() {
       const color = await sampleColor(currentFilePath, normalizedX, normalizedY);
       
       if (isPickingBase) {
-        const newSamples = [...baseColorSamples, color];
+        const newSample: ColorSample = { color, x: normalizedX, y: normalizedY };
+        const newSamples = [...baseColorSamples, newSample];
         setBaseColorSamples(newSamples);
         
         const avgColor = [0, 0, 0];
         for (const s of newSamples) {
-          avgColor[0] += s[0];
-          avgColor[1] += s[1];
-          avgColor[2] += s[2];
+          avgColor[0] += s.color[0];
+          avgColor[1] += s.color[1];
+          avgColor[2] += s.color[2];
         }
         avgColor[0] /= newSamples.length;
         avgColor[1] /= newSamples.length;
@@ -778,6 +780,12 @@ function App() {
                   pan={pan} 
                 />
               )}
+              <BaseColorMarkers 
+                samples={baseColorSamples}
+                imgRef={imgRef}
+                scale={scale}
+                pan={pan}
+              />
             </>
           ) : (
             <div style={{ color: '#666' }}>No image loaded</div>
