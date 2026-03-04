@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 from converter import convert_negative_to_positive
 from curve_fitting import fit_roll_curve, log_func, apply_curve
+from user_curves import apply_curves
 
 app = FastAPI()
 executor = ThreadPoolExecutor(max_workers=4)
@@ -31,6 +32,7 @@ class ConvertRequest(BaseModel):
     path: str
     exposure: float = 0.0
     base_color: list[float] | None = None
+    user_curves: dict | None = None
 
 class SampleRequest(BaseModel):
     path: str
@@ -42,6 +44,7 @@ class SettingsRequest(BaseModel):
     exposure: float = 0.0
     base_color: list[float] | None = None
     crop: list[float] | None = None
+    user_curves: dict | None = None
 
 class ExportRequest(BaseModel):
     path: str
@@ -49,6 +52,7 @@ class ExportRequest(BaseModel):
     exposure: float = 0.0
     base_color: list[float] | None = None
     crop: list[float] | None = None
+    user_curves: dict | None = None
 
 class RollProfileRequest(BaseModel):
     dir_path: str
@@ -161,7 +165,8 @@ def save_settings(request: SettingsRequest):
         settings = {
             "exposure": request.exposure,
             "base_color": request.base_color,
-            "crop": request.crop
+            "crop": request.crop,
+            "user_curves": request.user_curves
         }
         with open(settings_path, "w") as f:
             json.dump(settings, f)
@@ -181,11 +186,12 @@ def load_settings(request: ImagePath):
             return {
                 "exposure": settings.get("exposure", 0.0),
                 "base_color": settings.get("base_color", None),
-                "crop": settings.get("crop", None)
+                "crop": settings.get("crop", None),
+                "user_curves": settings.get("user_curves", None)
             }
     except Exception as e:
         # If we fail to read settings, just return defaults rather than breaking
-        return {"exposure": 0.0, "base_color": None, "crop": None}
+        return {"exposure": 0.0, "base_color": None, "crop": None, "user_curves": None}
 
 @app.post("/sample_color")
 def sample_color(request: SampleRequest):
@@ -390,6 +396,9 @@ def sync_convert_image(request: ConvertRequest) -> tuple[str, list]:
     # Convert back to 8-bit [0, 255] for JPEG encoding and histogram
     positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
     
+    if hasattr(request, 'user_curves') and request.user_curves:
+        positive_img_8bit = apply_curves(positive_img_8bit, request.user_curves)
+    
     # Calculate Histogram (on RGB channels)
     hist = []
     for i in range(3):
@@ -451,6 +460,9 @@ def sync_export_image(request: ExportRequest) -> str:
     
     # Convert back to 8-bit [0, 255] for JPEG encoding
     positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
+
+    if hasattr(request, 'user_curves') and request.user_curves:
+        positive_img_8bit = apply_curves(positive_img_8bit, request.user_curves)
     
     # OpenCV uses BGR
     bgr_img = cv2.cvtColor(positive_img_8bit, cv2.COLOR_RGB2BGR)
