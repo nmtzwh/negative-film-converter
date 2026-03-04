@@ -729,6 +729,25 @@ function App() {
                   transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`
                 }} 
               />
+              {(showOriginal || isBeforeViewSticky) && rawImageUrl && (
+                <div 
+                  style={{
+                    position: 'absolute',
+                    top: '10px',
+                    left: '10px',
+                    backgroundColor: 'rgba(255, 0, 0, 0.7)',
+                    color: 'white',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontWeight: 'bold',
+                    fontSize: '0.8rem',
+                    pointerEvents: 'none',
+                    zIndex: 5
+                  }}
+                >
+                  ORIGINAL NEGATIVE
+                </div>
+              )}
               {isCropping && (
                 <CropOverlay 
                   crop={crop} 
