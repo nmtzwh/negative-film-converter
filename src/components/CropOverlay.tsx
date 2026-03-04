@@ -26,9 +26,8 @@ export function CropOverlay({ crop, onChange, imgRef, scale, pan }: CropOverlayP
       
       // Calculate the size of the image as rendered (ignoring transforms)
       // Because we use object-fit: contain, the visible image might be smaller than the element.
-      const elRect = img.getBoundingClientRect();
-      const elWidth = elRect.width / scale; // Remove transform scale manually
-      const elHeight = elRect.height / scale;
+      const elWidth = img.clientWidth;
+      const elHeight = img.clientHeight;
 
       if (elWidth <= 0 || elHeight <= 0 || !img.naturalWidth) return;
 
@@ -146,11 +145,11 @@ export function CropOverlay({ crop, onChange, imgRef, scale, pan }: CropOverlayP
         overflow: 'hidden'
       }}
     >
-      <div 
+      <div
         ref={overlayRef}
+        className="overlay-container"
         style={{
-          position: 'relative',
-          width: imgLayout.width,
+          position: 'relative',          width: imgLayout.width,
           height: imgLayout.height,
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
           pointerEvents: 'auto',
@@ -210,7 +209,7 @@ export function CropOverlay({ crop, onChange, imgRef, scale, pan }: CropOverlayP
               top: handle.top,
               width: 16,
               height: 16,
-              transform: 'translate(-50%, -50%)',
+              transform: `translate(-50%, -50%) scale(${1 / scale})`,
               backgroundColor: 'white',
               border: '1px solid black',
               borderRadius: '50%',

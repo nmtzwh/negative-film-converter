@@ -95,11 +95,13 @@ body {
   transform-origin: center center;
 }
 
-.viewport:not(.is-panning) img {
+.viewport:not(.is-panning) img,
+.viewport:not(.is-panning) .overlay-container {
   transition: transform 0.1s ease-out;
 }
 
-.viewport.is-panning img {
+.viewport.is-panning img,
+.viewport.is-panning .overlay-container {
   transition: none;
 }
 

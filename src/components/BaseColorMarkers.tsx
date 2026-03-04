@@ -16,9 +16,8 @@ export function BaseColorMarkers({ samples, imgRef, scale, pan }: BaseColorMarke
       if (!imgRef.current) return;
       const img = imgRef.current;
       
-      const elRect = img.getBoundingClientRect();
-      const elWidth = elRect.width / scale; 
-      const elHeight = elRect.height / scale;
+      const elWidth = img.clientWidth; 
+      const elHeight = img.clientHeight;
 
       if (elWidth <= 0 || elHeight <= 0 || !img.naturalWidth) return;
 
@@ -76,6 +75,7 @@ export function BaseColorMarkers({ samples, imgRef, scale, pan }: BaseColorMarke
       }}
     >
       <div
+        className="overlay-container"
         style={{
           position: 'relative',
           width: imgLayout.width,
@@ -92,7 +92,7 @@ export function BaseColorMarkers({ samples, imgRef, scale, pan }: BaseColorMarke
               position: 'absolute',
               left: `${sample.x * 100}%`,
               top: `${sample.y * 100}%`,
-              transform: 'translate(-50%, -50%)',
+              transform: `translate(-50%, -50%) scale(${1 / scale})`,
               width: '16px',
               height: '16px',
             }}
