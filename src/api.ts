@@ -132,20 +132,27 @@ export async function convertImage(path: string, exposure: number = 0.0, baseCol
   };
 }
 
+export interface ColorSample {
+  color: number[];
+  x: number;
+  y: number;
+}
+
 export interface Settings {
   exposure: number;
   base_color: number[] | null;
+  base_color_samples?: ColorSample[] | null;
   crop?: number[] | null;
   user_curves?: Curves | null;
 }
 
-export async function saveSettings(path: string, exposure: number, baseColor: number[] | null, crop?: number[] | null, userCurves?: Curves | null): Promise<void> {
+export async function saveSettings(path: string, exposure: number, baseColor: number[] | null, baseColorSamples?: ColorSample[] | null, crop?: number[] | null, userCurves?: Curves | null): Promise<void> {
   const response = await fetch('http://localhost:8000/save_settings', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ path, exposure, base_color: baseColor, crop, user_curves: userCurves }),
+    body: JSON.stringify({ path, exposure, base_color: baseColor, base_color_samples: baseColorSamples, crop, user_curves: userCurves }),
   });
 
   if (!response.ok) {

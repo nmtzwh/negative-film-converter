@@ -1,10 +1,10 @@
 import { useState, useCallback, useRef } from 'react';
-import { Curves } from '../api';
+import { Curves, ColorSample } from '../api';
 
 export interface AppState {
   exposure: number;
   baseColor: number[] | null;
-  baseColorSamples: number[][];
+  baseColorSamples: ColorSample[];
   crop: number[] | null;
   userCurves: Curves;
 }
