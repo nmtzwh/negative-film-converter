@@ -86,7 +86,7 @@ export const ToneCurveEditor: React.FC<ToneCurveEditorProps> = ({ curves, onChan
     onChange({ ...curves, [activeChannel]: newPoints });
   }, [draggingIdx, activePoints, activeChannel, curves, onChange]);
 
-  const handlePointerUp = useCallback((e: PointerEvent) => {
+  const handlePointerUp = useCallback(() => {
     setDraggingIdx(null);
   }, []);
 

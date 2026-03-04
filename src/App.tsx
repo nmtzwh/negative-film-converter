@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, MouseEvent } from 'react';
-import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry, saveSettings, loadSettings, exportImage, Settings, updateRollProfile, loadRollProfile, getRawPreview } from './api';
+import { checkHealth, loadImage, convertImage, ImageMetadata, listDirectory, FileEntry, saveSettings, loadSettings, exportImage, Settings, updateRollProfile, loadRollProfile, getRawPreview, Curves } from './api';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Histogram } from './components/Histogram';
 import { FilmStrip } from './components/FilmStrip';
 import { CurveGraph } from './components/CurveGraph';
 import { CropOverlay } from './components/CropOverlay';
+import { ToneCurveEditor } from './components/ToneCurveEditor';
 import { useHistory } from './hooks/useHistory';
 import './App.css';
 
@@ -24,11 +25,15 @@ function App() {
   const [isCropping, setIsCropping] = useState(false);
   const [files, setFiles] = useState<FileEntry[]>([]);
   
+  const defaultCurves: Curves = { rgb: [[0,0],[1,1]], r: [[0,0],[1,1]], g: [[0,0],[1,1]], b: [[0,0],[1,1]] };
+  const [userCurves, setUserCurves] = useState<Curves>(defaultCurves);
+
   const { pushState, undo, redo, resetHistory, canUndo, canRedo } = useHistory({
     exposure: 0.0,
     baseColor: null,
     baseColorSamples: [],
-    crop: null
+    crop: null,
+    userCurves: defaultCurves
   });
 
   // New States for Task 2 & 3
@@ -80,6 +85,7 @@ function App() {
             setBaseColor(prevState.baseColor);
             setBaseColorSamples(prevState.baseColorSamples);
             setCrop(prevState.crop);
+            setUserCurves(prevState.userCurves);
           }
         } else if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) {
           e.preventDefault();
@@ -89,6 +95,7 @@ function App() {
             setBaseColor(nextState.baseColor);
             setBaseColorSamples(nextState.baseColorSamples);
             setCrop(nextState.crop);
+            setUserCurves(nextState.userCurves);
           }
         }
       }
@@ -115,7 +122,7 @@ function App() {
       setLoading(true);
       setError(null);
       try {
-        const result = await convertImage(currentFilePath, exposure, baseColor);
+        const result = await convertImage(currentFilePath, exposure, baseColor, userCurves);
         if (!controller.signal.aborted) {
           setImageUrl(result.imageUrl);
           setHistogramData(result.histogram);
@@ -135,17 +142,17 @@ function App() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [exposure, currentFilePath, baseColor, curveVisData]);
+  }, [exposure, currentFilePath, baseColor, curveVisData, userCurves]);
 
   // Auto-save settings debounced and push history
   useEffect(() => {
     if (!currentFilePath) return;
     const timer = setTimeout(() => {
-      pushState({ exposure, baseColor, baseColorSamples, crop });
-      saveSettings(currentFilePath, exposure, baseColor, crop).catch(e => console.error("Auto-save failed:", e));
+      pushState({ exposure, baseColor, baseColorSamples, crop, userCurves });
+      saveSettings(currentFilePath, exposure, baseColor, crop, userCurves).catch(e => console.error("Auto-save failed:", e));
     }, 1000);
     return () => clearTimeout(timer);
-  }, [exposure, baseColor, baseColorSamples, crop, currentFilePath, pushState]);
+  }, [exposure, baseColor, baseColorSamples, crop, userCurves, currentFilePath, pushState]);
 
   const loadFile = async (file: string) => {
     setCurrentFilePath(null); // Reset to clear old image
@@ -169,12 +176,14 @@ function App() {
       setBaseColor(settings.base_color);
       setBaseColorSamples([]);
       setCrop(settings.crop || null);
+      setUserCurves(settings.user_curves || defaultCurves);
       
       resetHistory({
         exposure: settings.exposure,
         baseColor: settings.base_color,
         baseColorSamples: [],
-        crop: settings.crop || null
+        crop: settings.crop || null,
+        userCurves: settings.user_curves || defaultCurves
       });
 
       setCurrentFilePath(file); // This will trigger the conversion
@@ -375,7 +384,7 @@ function App() {
   };
 
   const handleCopySettings = () => {
-    setSettingsClipboard({ exposure, base_color: baseColor, crop });
+    setSettingsClipboard({ exposure, base_color: baseColor, crop, user_curves: userCurves });
   };
 
   const handlePasteSettings = () => {
@@ -383,6 +392,7 @@ function App() {
       setExposure(settingsClipboard.exposure);
       setBaseColor(settingsClipboard.base_color);
       if (settingsClipboard.crop) setCrop(settingsClipboard.crop);
+      if (settingsClipboard.user_curves) setUserCurves(settingsClipboard.user_curves);
     }
   };
 
@@ -398,7 +408,7 @@ function App() {
       }
       if (outputDir) {
         setLoading(true);
-        await exportImage(currentFilePath, outputDir, exposure, baseColor, crop);
+        await exportImage(currentFilePath, outputDir, exposure, baseColor, crop, userCurves);
       }
     } catch (e: any) {
       setError(e.message);
@@ -424,7 +434,7 @@ function App() {
         for (const file of files) {
           try {
             const settings = await loadSettings(file.path);
-            await exportImage(file.path, outputDir, settings.exposure, settings.base_color, settings.crop);
+            await exportImage(file.path, outputDir, settings.exposure, settings.base_color, settings.crop, settings.user_curves);
           } catch (err: any) {
             console.error(`Failed to export ${file.name}:`, err);
             // Optionally could gather errors here
@@ -508,6 +518,7 @@ function App() {
                   setBaseColor(prevState.baseColor);
                   setBaseColorSamples(prevState.baseColorSamples);
                   setCrop(prevState.crop);
+                  setUserCurves(prevState.userCurves);
                 }
               }} disabled={!canUndo || loading} title="Undo (Ctrl+Z)">
                 Undo
@@ -519,6 +530,7 @@ function App() {
                   setBaseColor(nextState.baseColor);
                   setBaseColorSamples(nextState.baseColorSamples);
                   setCrop(nextState.crop);
+                  setUserCurves(nextState.userCurves);
                 }
               }} disabled={!canRedo || loading} title="Redo (Ctrl+Y)">
                 Redo
@@ -787,6 +799,11 @@ function App() {
             ) : (
               <div style={{ fontSize: '0.85rem', color: '#666' }}>No data</div>
             )}
+          </div>
+
+          <div className="panel-section">
+            <h3>Tone Curves</h3>
+            <ToneCurveEditor curves={userCurves} onChange={(c) => { setUserCurves(c); setIsBeforeViewSticky(false); }} />
           </div>
 
           <div className="panel-section">

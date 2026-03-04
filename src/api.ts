@@ -104,18 +104,20 @@ export async function getRawPreview(path: string): Promise<string> {
   return data.image;
 }
 
+export type Curves = { rgb: [number,number][], r: [number,number][], g: [number,number][], b: [number,number][] };
+
 export interface ConvertResult {
   imageUrl: string;
   histogram: number[][]; // [R, G, B] each with 256 bins
 }
 
-export async function convertImage(path: string, exposure: number = 0.0, baseColor: number[] | null = null): Promise<ConvertResult> {
+export async function convertImage(path: string, exposure: number = 0.0, baseColor: number[] | null = null, userCurves: Curves | null = null): Promise<ConvertResult> {
   const response = await fetch('http://localhost:8000/convert_image', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ path, exposure, base_color: baseColor }),
+    body: JSON.stringify({ path, exposure, base_color: baseColor, user_curves: userCurves }),
   });
 
   if (!response.ok) {
@@ -134,15 +136,16 @@ export interface Settings {
   exposure: number;
   base_color: number[] | null;
   crop?: number[] | null;
+  user_curves?: Curves | null;
 }
 
-export async function saveSettings(path: string, exposure: number, baseColor: number[] | null, crop?: number[] | null): Promise<void> {
+export async function saveSettings(path: string, exposure: number, baseColor: number[] | null, crop?: number[] | null, userCurves?: Curves | null): Promise<void> {
   const response = await fetch('http://localhost:8000/save_settings', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ path, exposure, base_color: baseColor, crop }),
+    body: JSON.stringify({ path, exposure, base_color: baseColor, crop, user_curves: userCurves }),
   });
 
   if (!response.ok) {
@@ -168,13 +171,13 @@ export async function loadSettings(path: string): Promise<Settings> {
   return response.json();
 }
 
-export async function exportImage(path: string, outputDir: string, exposure: number, baseColor: number[] | null, crop?: number[] | null): Promise<string> {
+export async function exportImage(path: string, outputDir: string, exposure: number, baseColor: number[] | null, crop?: number[] | null, userCurves?: Curves | null): Promise<string> {
   const response = await fetch('http://localhost:8000/export_image', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ path, output_dir: outputDir, exposure, base_color: baseColor, crop }),
+    body: JSON.stringify({ path, output_dir: outputDir, exposure, base_color: baseColor, crop, user_curves: userCurves }),
   });
 
   if (!response.ok) {
