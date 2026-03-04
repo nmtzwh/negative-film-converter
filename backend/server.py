@@ -1,3 +1,5 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +13,7 @@ from converter import convert_negative_to_positive
 from curve_fitting import fit_roll_curve, log_func, apply_curve
 
 app = FastAPI()
+executor = ThreadPoolExecutor(max_workers=4)
 
 # Add CORS middleware to allow the Tauri frontend to connect
 app.add_middleware(
@@ -55,7 +58,7 @@ class DirectoryRequest(BaseModel):
     path: str
 
 @app.get("/health")
-def health():
+async def health():
     return {"status": "ok"}
 
 import json
@@ -299,108 +302,116 @@ def list_directory(request: DirectoryRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+def sync_get_thumbnail(path: str) -> str:
+    if is_raw(path):
+        with rawpy.imread(path) as raw:
+            # Use half_size for faster loading of raw
+            rgb = raw.postprocess(half_size=True, use_camera_wb=True, output_bps=8)
+            
+            # Resize
+            h, w = rgb.shape[:2]
+            scale = 200 / max(h, w)
+            new_size = (int(w * scale), int(h * scale))
+            thumb_rgb = cv2.resize(rgb, new_size, interpolation=cv2.INTER_AREA)
+            
+            # BGR for OpenCV
+            thumb = cv2.cvtColor(thumb_rgb, cv2.COLOR_RGB2BGR)
+    else:
+        # Fast path for non-RAWs
+        img = cv2.imread(path)
+        if img is None:
+            raise Exception("Failed to read image")
+        # Resize
+        h, w = img.shape[:2]
+        scale = 200 / max(h, w)
+        new_size = (int(w * scale), int(h * scale))
+        thumb = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
+            
+    # Encode
+    success, encoded_image = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    if not success:
+        raise Exception("Failed to encode thumbnail")
+        
+    return base64.b64encode(encoded_image.tobytes()).decode('utf-8')
+
 @app.post("/get_thumbnail")
-def get_thumbnail(request: ImagePath):
+async def get_thumbnail(request: ImagePath):
     if not os.path.exists(request.path):
         raise HTTPException(status_code=404, detail="File not found")
         
     try:
-        if is_raw(request.path):
-            with rawpy.imread(request.path) as raw:
-                # Use half_size for faster loading of raw
-                rgb = raw.postprocess(half_size=True, use_camera_wb=True, output_bps=8)
-                
-                # Resize
-                h, w = rgb.shape[:2]
-                scale = 200 / max(h, w)
-                new_size = (int(w * scale), int(h * scale))
-                thumb_rgb = cv2.resize(rgb, new_size, interpolation=cv2.INTER_AREA)
-                
-                # BGR for OpenCV
-                thumb = cv2.cvtColor(thumb_rgb, cv2.COLOR_RGB2BGR)
-        else:
-            # Fast path for non-RAWs
-            img = cv2.imread(request.path)
-            if img is None:
-                raise Exception("Failed to read image")
-            # Resize
-            h, w = img.shape[:2]
-            scale = 200 / max(h, w)
-            new_size = (int(w * scale), int(h * scale))
-            thumb = cv2.resize(img, new_size, interpolation=cv2.INTER_AREA)
-                
-        # Encode
-        success, encoded_image = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        if not success:
-            raise Exception("Failed to encode thumbnail")
-            
-        img_b64 = base64.b64encode(encoded_image.tobytes()).decode('utf-8')
+        loop = asyncio.get_running_loop()
+        img_b64 = await loop.run_in_executor(executor, sync_get_thumbnail, request.path)
         return {"image": f"data:image/jpeg;base64,{img_b64}"}
-        
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 from cache import global_cache
 
+def sync_convert_image(request: ConvertRequest) -> tuple[str, list]:
+    # Check for roll profile
+    dir_path = os.path.dirname(request.path)
+    profile_path = os.path.join(dir_path, "roll_profile.json")
+    curve_params = None
+    if os.path.exists(profile_path):
+        try:
+            with open(profile_path, "r") as f:
+                data = json.load(f)
+                curve_params = data.get("curve_params")
+        except:
+            pass
+
+    base_color_tuple = tuple(request.base_color) if request.base_color else None
+    
+    # Check Cache
+    cached_positive = global_cache.get(request.path, base_color_tuple, curve_params)
+    
+    if cached_positive is not None:
+        positive_img_base = cached_positive
+    else:
+        img_array = get_rgb_float(request.path)
+        
+        if curve_params:
+            positive_img_base = apply_curve(img_array, curve_params)
+        else:
+            # Apply generic conversion math
+            positive_img_base = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=0.0)
+        
+        global_cache.set(request.path, base_color_tuple, curve_params, positive_img_base)
+
+    # Apply exposure fast
+    gain = 2.0 ** request.exposure
+    positive_img = np.clip(positive_img_base * gain, 0.0, 1.0)
+    
+    # Convert back to 8-bit [0, 255] for JPEG encoding and histogram
+    positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
+    
+    # Calculate Histogram (on RGB channels)
+    hist = []
+    for i in range(3):
+        hist_channel = cv2.calcHist([positive_img_8bit], [i], None, [256], [0, 256])
+        hist.append([int(v[0]) for v in hist_channel])
+        
+    # OpenCV uses BGR, so convert RGB to BGR before encoding
+    bgr_img = cv2.cvtColor(positive_img_8bit, cv2.COLOR_RGB2BGR)
+    
+    # Encode as JPEG
+    success, encoded_image = cv2.imencode(".jpg", bgr_img)
+    if not success:
+        raise Exception("Failed to encode image")
+        
+    # Return JSON with base64 image and histogram
+    img_b64 = base64.b64encode(encoded_image.tobytes()).decode('utf-8')
+    return img_b64, hist
+
 @app.post("/convert_image")
-def convert_image(request: ConvertRequest):
+async def convert_image(request: ConvertRequest):
     if not os.path.exists(request.path):
         raise HTTPException(status_code=404, detail="File not found")
     
     try:
-        # Check for roll profile
-        dir_path = os.path.dirname(request.path)
-        profile_path = os.path.join(dir_path, "roll_profile.json")
-        curve_params = None
-        if os.path.exists(profile_path):
-            try:
-                with open(profile_path, "r") as f:
-                    data = json.load(f)
-                    curve_params = data.get("curve_params")
-            except:
-                pass
-
-        base_color_tuple = tuple(request.base_color) if request.base_color else None
-        
-        # Check Cache
-        cached_positive = global_cache.get(request.path, base_color_tuple, curve_params)
-        
-        if cached_positive is not None:
-            positive_img_base = cached_positive
-        else:
-            img_array = get_rgb_float(request.path)
-            
-            if curve_params:
-                positive_img_base = apply_curve(img_array, curve_params)
-            else:
-                # Apply generic conversion math
-                positive_img_base = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=0.0)
-            
-            global_cache.set(request.path, base_color_tuple, curve_params, positive_img_base)
-
-        # Apply exposure fast
-        gain = 2.0 ** request.exposure
-        positive_img = np.clip(positive_img_base * gain, 0.0, 1.0)
-        
-        # Convert back to 8-bit [0, 255] for JPEG encoding and histogram
-        positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
-        
-        # Calculate Histogram (on RGB channels)
-        hist = []
-        for i in range(3):
-            hist_channel = cv2.calcHist([positive_img_8bit], [i], None, [256], [0, 256])
-            hist.append([int(v[0]) for v in hist_channel])
-            
-        # OpenCV uses BGR, so convert RGB to BGR before encoding
-        bgr_img = cv2.cvtColor(positive_img_8bit, cv2.COLOR_RGB2BGR)
-        
-        # Encode as JPEG
-        success, encoded_image = cv2.imencode(".jpg", bgr_img)
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to encode image")
-            
-        # Return JSON with base64 image and histogram
-        img_b64 = base64.b64encode(encoded_image.tobytes()).decode('utf-8')
+        loop = asyncio.get_running_loop()
+        img_b64, hist = await loop.run_in_executor(executor, sync_convert_image, request)
         return {
             "image": f"data:image/jpeg;base64,{img_b64}",
             "histogram": hist
