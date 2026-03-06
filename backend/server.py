@@ -384,11 +384,12 @@ def sync_convert_image(request: ConvertRequest) -> tuple[str, list]:
     else:
         img_array = get_rgb_float(request.path)
         
-        if curve_params:
-            positive_img_base = apply_curve(img_array, curve_params)
-        else:
-            # Apply generic conversion math
-            positive_img_base = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=0.0)
+        positive_img_base = convert_negative_to_positive(
+            img_array, 
+            base_color=base_color_tuple, 
+            exposure=0.0,
+            curve_params=curve_params
+        )
         
         global_cache.set(request.path, base_color_tuple, curve_params, positive_img_base)
 
@@ -451,15 +452,14 @@ def sync_export_image(request: ExportRequest) -> str:
         except:
             pass
 
-    if curve_params:
-        positive_img = apply_curve(img_array, curve_params)
-        # Apply exposure
-        gain = 2.0 ** request.exposure
-        positive_img = np.clip(positive_img * gain, 0.0, 1.0)
-    else:
-        # Apply generic conversion math
-        base_color_tuple = tuple(request.base_color) if request.base_color else None
-        positive_img = convert_negative_to_positive(img_array, base_color=base_color_tuple, exposure=request.exposure)
+    base_color_tuple = tuple(request.base_color) if request.base_color else None
+    
+    positive_img = convert_negative_to_positive(
+        img_array, 
+        base_color=base_color_tuple, 
+        exposure=request.exposure,
+        curve_params=curve_params
+    )
     
     # Convert back to 8-bit [0, 255] for JPEG encoding
     positive_img_8bit = (positive_img * 255.0).astype(np.uint8)
