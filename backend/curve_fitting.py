@@ -9,7 +9,7 @@ def log_func(x, a, b, c, d):
     safe_x = np.clip(b * x + c, 1e-6, None)
     return a * np.log(safe_x) + d
 
-def fit_roll_curve(anchors: list[list[float]]):
+def fit_roll_curve(anchors: list[list[float]], base_color: tuple = None):
     """
     anchors: list of [R, G, B] floats from the raw negative (0.0 - 1.0)
     Returns: Dict of curve parameters for each channel, or None if not enough data
@@ -19,12 +19,20 @@ def fit_roll_curve(anchors: list[list[float]]):
         
     anchors_np = np.array(anchors) # Shape: (N, 3)
     
-    # We want to map these raw values to a neutral gray line.
-    # A simple target is just the average luminance of the anchor, inverted.
-    # E.g., a dark dense spot on negative = bright highlight in positive.
-    target_luma = 1.0 - np.mean(anchors_np, axis=1)
+    # Pre-process anchors as they would be in the pipeline
+    if base_color is not None:
+        base_color_arr = np.array(base_color)
+    else:
+        base_color_arr = np.array([200.0, 130.0, 80.0]) / 255.0
+        
+    base_color_arr = np.clip(base_color_arr, 1e-6, 1.0)
+    anchors_normalized = np.clip(anchors_np / base_color_arr, 0.0, 1.0)
+    anchors_inverted = 1.0 - anchors_normalized
     
-    # Normalize targets to stretch from 0.1 to 0.9 roughly to give room
+    # Target luma is based on inverted anchors
+    target_luma = np.mean(anchors_inverted, axis=1)
+    
+    # Normalize targets
     target_min, target_max = np.min(target_luma), np.max(target_luma)
     if target_max > target_min:
         targets = 0.1 + 0.8 * (target_luma - target_min) / (target_max - target_min)
@@ -38,7 +46,7 @@ def fit_roll_curve(anchors: list[list[float]]):
     p0 = [1.0, 1.0, 0.0, 0.0]
     
     for i in range(3):
-        x_data = anchors_np[:, i]
+        x_data = anchors_inverted[:, i]
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", OptimizeWarning)
